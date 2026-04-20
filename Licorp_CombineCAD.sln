@@ -1,0 +1,80 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{D954291E-2A0B-460D-934E-DC6B0785DB48}") = "Licorp_CombineCAD.Shared", "src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.shproj", "{A1B2C3D4-1111-2222-3333-444455556666}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_CombineCAD.R2020", "src\Licorp_CombineCAD.R2020\Licorp_CombineCAD.R2020.csproj", "{B1B2C3D4-1111-2222-3333-444455556677}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_CombineCAD.R2021", "src\Licorp_CombineCAD.R2021\Licorp_CombineCAD.R2021.csproj", "{B1B2C3D4-1111-2222-3333-444455556678}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_CombineCAD.R2022", "src\Licorp_CombineCAD.R2022\Licorp_CombineCAD.R2022.csproj", "{B1B2C3D4-1111-2222-3333-444455556679}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_CombineCAD.R2023", "src\Licorp_CombineCAD.R2023\Licorp_CombineCAD.R2023.csproj", "{B1B2C3D4-1111-2222-3333-444455556680}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_CombineCAD.R2024", "src\Licorp_CombineCAD.R2024\Licorp_CombineCAD.R2024.csproj", "{B1B2C3D4-1111-2222-3333-444455556681}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_CombineCAD.R2025", "src\Licorp_CombineCAD.R2025\Licorp_CombineCAD.R2025.csproj", "{C1B2C3D4-1111-2222-3333-444455556688}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_CombineCAD.R2026", "src\Licorp_CombineCAD.R2026\Licorp_CombineCAD.R2026.csproj", "{C1B2C3D4-1111-2222-3333-444455556689}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_CombineCAD.R2027", "src\Licorp_CombineCAD.R2027\Licorp_CombineCAD.R2027.csproj", "{E1B2C3D4-1111-2222-3333-444455556600}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Licorp_MergeSheets", "src.acad\Licorp_MergeSheets\Licorp_MergeSheets.csproj", "{D1B2C3D4-1111-2222-3333-444455556699}"
+EndProject
+Global
+GlobalSection(SolutionConfigurationPlatforms) = preSolution
+Debug|x64 = Debug|x64
+Release|x64 = Release|x64
+EndGlobalSection
+GlobalSection(ProjectConfigurationPlatforms) = postSolution
+{B1B2C3D4-1111-2222-3333-444455556677}.Debug|x64.ActiveCfg = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556677}.Debug|x64.Build.0 = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556677}.Release|x64.ActiveCfg = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556677}.Release|x64.Build.0 = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556678}.Debug|x64.ActiveCfg = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556678}.Debug|x64.Build.0 = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556678}.Release|x64.ActiveCfg = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556678}.Release|x64.Build.0 = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556679}.Debug|x64.ActiveCfg = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556679}.Debug|x64.Build.0 = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556679}.Release|x64.ActiveCfg = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556679}.Release|x64.Build.0 = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556680}.Debug|x64.ActiveCfg = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556680}.Debug|x64.Build.0 = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556680}.Release|x64.ActiveCfg = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556680}.Release|x64.Build.0 = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556681}.Debug|x64.ActiveCfg = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556681}.Debug|x64.Build.0 = Debug|x64
+{B1B2C3D4-1111-2222-3333-444455556681}.Release|x64.ActiveCfg = Release|x64
+{B1B2C3D4-1111-2222-3333-444455556681}.Release|x64.Build.0 = Release|x64
+{C1B2C3D4-1111-2222-3333-444455556688}.Debug|x64.ActiveCfg = Debug|x64
+{C1B2C3D4-1111-2222-3333-444455556688}.Debug|x64.Build.0 = Debug|x64
+{C1B2C3D4-1111-2222-3333-444455556688}.Release|x64.ActiveCfg = Release|x64
+{C1B2C3D4-1111-2222-3333-444455556688}.Release|x64.Build.0 = Release|x64
+{C1B2C3D4-1111-2222-3333-444455556689}.Debug|x64.ActiveCfg = Debug|x64
+{C1B2C3D4-1111-2222-3333-444455556689}.Debug|x64.Build.0 = Debug|x64
+{C1B2C3D4-1111-2222-3333-444455556689}.Release|x64.ActiveCfg = Release|x64
+{C1B2C3D4-1111-2222-3333-444455556689}.Release|x64.Build.0 = Release|x64
+{D1B2C3D4-1111-2222-3333-444455556699}.Debug|x64.ActiveCfg = Debug|x64
+{D1B2C3D4-1111-2222-3333-444455556699}.Debug|x64.Build.0 = Debug|x64
+{D1B2C3D4-1111-2222-3333-444455556699}.Release|x64.ActiveCfg = Release|x64
+{D1B2C3D4-1111-2222-3333-444455556699}.Release|x64.Build.0 = Release|x64
+{E1B2C3D4-1111-2222-3333-444455556600}.Debug|x64.ActiveCfg = Debug|x64
+{E1B2C3D4-1111-2222-3333-444455556600}.Debug|x64.Build.0 = Debug|x64
+{E1B2C3D4-1111-2222-3333-444455556600}.Release|x64.ActiveCfg = Release|x64
+{E1B2C3D4-1111-2222-3333-444455556600}.Release|x64.Build.0 = Release|x64
+EndGlobalSection
+GlobalSection(SharedMSBuildProjectFiles) = preSolution
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{A1B2C3D4-1111-2222-3333-444455556666}*SharedItemsImport = 13
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{B1B2C3D4-1111-2222-3333-444455556677}*SharedItemsImport = 5
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{B1B2C3D4-1111-2222-3333-444455556678}*SharedItemsImport = 5
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{B1B2C3D4-1111-2222-3333-444455556679}*SharedItemsImport = 5
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{B1B2C3D4-1111-2222-3333-444455556680}*SharedItemsImport = 5
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{B1B2C3D4-1111-2222-3333-444455556681}*SharedItemsImport = 5
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{C1B2C3D4-1111-2222-3333-444455556688}*SharedItemsImport = 5
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{C1B2C3D4-1111-2222-3333-444455556689}*SharedItemsImport = 5
+src\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems*{E1B2C3D4-1111-2222-3333-444455556600}*SharedItemsImport = 5
+EndGlobalSection
+EndGlobal

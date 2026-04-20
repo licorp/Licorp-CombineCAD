@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+    Name="Licorp MergeSheets"
+    Description="AutoCAD plugin for merging multiple DWG files with multiple layouts"
+    Author="LICORP"
+    AppVersion="1.0.0.0"
+    ProductCode="{E5F6A7B8-C9D0-4E1F-9A2B-3C4D5E6F7A8B}"
+    UpgradeCode=""
+    HelpFile=""
+    Icon=""
+    ObjectARX="No">
+  <Company Name="LICORP" />
+  <Components>
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD" SeriesMin="24.0" SeriesMax="24.99" />
+    <ComponentEntry AppName="Licorp MergeSheets"
+        AppType="Managed"
+        ModuleName="Contents\Licorp_MergeSheets.dll"
+        AppDescription="Merge DWG files into multi-layout output"
+        LoadOnAutoCADStartup="True" />
+  </Components>
+</ApplicationPackage>

@@ -1,0 +1,26 @@
+<Project>
+  <Target Name="DeployAddInManifestLocally" AfterTargets="Build" Condition="false">
+    <PropertyGroup>
+      <RevitAddinsFolder>$(AppData)\Autodesk\Revit\Addins\$(RevitVersion)</RevitAddinsFolder>
+      <ManifestPath>$(RevitAddinsFolder)\Licorp_CombineCAD.addin</ManifestPath>
+    </PropertyGroup>
+
+    <Message Text="Deploying addin manifest to $(RevitAddinsFolder)" Importance="high" />
+
+    <ItemGroup>
+      <ManifestContent Include="&lt;?xml version=&quot;1.0&quot; encoding=&quot;utf-8&quot;?&gt;" />
+      <ManifestContent Include="&lt;RevitAddIns&gt;" />
+      <ManifestContent Include="  &lt;AddIn Type=&quot;Application&quot;&gt;" />
+      <ManifestContent Include="    &lt;Name&gt;Licorp CombineCAD&lt;/Name&gt;" />
+      <ManifestContent Include="    &lt;Assembly&gt;Licorp_CombineCAD.dll&lt;/Assembly&gt;" />
+      <ManifestContent Include="    &lt;AddInId&gt;F7A3B2C1-4D5E-6F78-9A0B-C1D2E3F4A5B6&lt;/AddInId&gt;" />
+      <ManifestContent Include="    &lt;FullClassName&gt;Licorp_CombineCAD.App&lt;/FullClassName&gt;" />
+      <ManifestContent Include="    &lt;VendorId&gt;LICORP&lt;/VendorId&gt;" />
+      <ManifestContent Include="    &lt;VendorDescription&gt;Licorp - Export Revit sheets to DWG with multi-layout merge&lt;/VendorDescription&gt;" />
+      <ManifestContent Include="  &lt;/AddIn&gt;" />
+      <ManifestContent Include="&lt;/RevitAddIns&gt;" />
+    </ItemGroup>
+
+    <WriteLinesToFile File="$(ManifestPath)" Lines="@(ManifestContent)" Overwrite="true" Encoding="UTF-8" />
+  </Target>
+</Project>

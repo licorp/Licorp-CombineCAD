@@ -1,0 +1,25 @@
+## Build output
+bin/
+obj/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+
+## ReSharper
+_ReSharper*/
+
+## NuGet
+*.nupkg
+
+## OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## Temp/docs not needed in repo
+implementation_plan.md
+task.md
+WALKTHROUGH.md
+AUTOCAD_PLUGIN_SETUP.md

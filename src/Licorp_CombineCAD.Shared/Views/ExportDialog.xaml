@@ -1,0 +1,283 @@
+<Window x:Class="Licorp_CombineCAD.Views.ExportDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:converters="clr-namespace:Licorp_CombineCAD.Views.Converters"
+        mc:Ignorable="d"
+        Title="Export to DWG - CombineCAD"
+        Height="700" Width="1000"
+        MinHeight="500" MinWidth="800"
+        WindowStartupLocation="CenterOwner"
+        Background="#1E1E1E"
+        Foreground="#FFFFFF">
+
+    <Window.Resources>
+        <converters:BoolToVisibleConverter x:Key="BoolToVisibleConverter"/>
+        <converters:BoolToHiddenConverter x:Key="BoolToHiddenConverter"/>
+        <converters:StringToVisibleConverter x:Key="StringToVisibleConverter"/>
+        <converters:EmptyToVisibleConverter x:Key="EmptyToVisibleConverter"/>
+        <converters:EnumToBoolConverter x:Key="EnumToBoolConverter"/>
+
+        <Style x:Key="ModernButton" TargetType="Button">
+            <Setter Property="Background" Value="#0078D4"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#106EBE"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#3E3E3E"/>
+                    <Setter Property="Foreground" Value="#808080"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource ModernButton}">
+            <Setter Property="Background" Value="#3E3E3E"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#4E4E4E"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ModernTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#2D2D2D"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="#3E3E3E"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="CaretBrush" Value="White"/>
+        </Style>
+
+        <Style x:Key="ModernCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="Margin" Value="0,4"/>
+        </Style>
+
+        <Style x:Key="ModernComboBox" TargetType="ComboBox">
+            <Setter Property="Background" Value="#2D2D2D"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="#3E3E3E"/>
+            <Setter Property="Padding" Value="8,6"/>
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#0078D4"/>
+            <Setter Property="Margin" Value="0,12,0,8"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="320"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Panel: Sheet List -->
+        <Grid Grid.Column="0" Margin="0,0,16,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <TextBlock Grid.Row="0" Text="Select Sheets to Export"
+                       FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12"/>
+
+            <!-- Filter -->
+            <Grid Grid.Row="1" Margin="0,0,0,12">
+                <TextBox x:Name="FilterTextBox"
+                         Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource ModernTextBox}"
+                         VerticalContentAlignment="Center"/>
+                <TextBlock Text="Search sheets..."
+                           IsHitTestVisible="False"
+                           Foreground="#808080"
+                           Margin="12,0,0,0"
+                           VerticalAlignment="Center"
+                           Visibility="{Binding FilterText, Converter={StaticResource EmptyToVisibleConverter}}"/>
+            </Grid>
+
+        <!-- Sheet DataGrid -->
+        <DataGrid Grid.Row="2"
+        x:Name="SheetDataGrid"
+        ItemsSource="{Binding FilteredSheets}"
+        AutoGenerateColumns="False"
+        CanUserAddRows="False"
+        CanUserDeleteRows="False"
+        SelectionMode="Extended"
+        GridLinesVisibility="Horizontal"
+        HeadersVisibility="Column"
+        Background="#2D2D2D"
+        Foreground="White"
+        BorderBrush="#3E3E3E"
+        RowBackground="#2D2D2D"
+        AlternatingRowBackground="#252525"
+        HorizontalGridLinesBrush="#3E3E3E"
+        AllowDrop="True"
+        DragOver="SheetDataGrid_DragOver"
+        Drop="SheetDataGrid_Drop"
+        PreviewMouseLeftButtonDown="SheetDataGrid_PreviewMouseLeftButtonDown"
+        PreviewMouseMove="SheetDataGrid_PreviewMouseMove">
+                <DataGrid.Columns>
+                    <DataGridCheckBoxColumn Header="" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
+                    <DataGridTextColumn Header="Number" Binding="{Binding SheetNumber}" Width="80" IsReadOnly="True"/>
+                    <DataGridTextColumn Header="Name" Binding="{Binding SheetName}" Width="*" IsReadOnly="True"/>
+                    <DataGridTextColumn Header="Revision" Binding="{Binding Revision}" Width="80" IsReadOnly="True"/>
+                    <DataGridTextColumn Header="Size" Binding="{Binding PaperSize}" Width="60" IsReadOnly="True"/>
+                    <DataGridTextColumn Header="Scale" Binding="{Binding ScaleText}" Width="80" IsReadOnly="True"/>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <!-- Selection buttons -->
+            <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
+                <Button Content="Select All" Command="{Binding SelectAllCommand}"
+                        Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"/>
+                <Button Content="Deselect All" Command="{Binding DeselectAllCommand}"
+                        Style="{StaticResource SecondaryButton}"/>
+                <TextBlock Text="{Binding SelectedCount, StringFormat='{}{0} selected'}"
+                           Foreground="#808080" VerticalAlignment="Center" Margin="16,0,0,0"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Right Panel: Options -->
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Text="Export Options" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,16"/>
+
+                <!-- Output Folder -->
+                <TextBlock Text="Output Folder" Style="{StaticResource SectionHeader}"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Text="{Binding OutputFolder}" Style="{StaticResource ModernTextBox}"
+                             IsReadOnly="True" Margin="0,0,8,0"/>
+                    <Button Grid.Column="1" Content="Browse" Command="{Binding BrowseFolderCommand}"
+                            Style="{StaticResource SecondaryButton}"/>
+                </Grid>
+
+        <!-- Export Setup -->
+        <TextBlock Text="DWG Export Setup" Style="{StaticResource SectionHeader}"/>
+        <ComboBox ItemsSource="{Binding AvailableSetups}"
+                  SelectedItem="{Binding SelectedSetup}"
+                  Style="{StaticResource ModernComboBox}"/>
+
+        <!-- DWG Version -->
+        <TextBlock Text="DWG Version" Style="{StaticResource SectionHeader}"/>
+        <ComboBox ItemsSource="{Binding AvailableDwgVersions}"
+                  SelectedItem="{Binding SelectedDwgVersion}"
+                  Style="{StaticResource ModernComboBox}"/>
+
+                <!-- Export Mode -->
+                <TextBlock Text="Export Mode" Style="{StaticResource SectionHeader}"/>
+                <StackPanel>
+                    <RadioButton Content="Individual DWG (each sheet)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Individual}"
+                                 Foreground="White" Margin="0,4"/>
+                    <RadioButton Content="Multi-Layout (merged, multiple layouts)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=MultiLayout}"
+                                 Foreground="White" Margin="0,4"/>
+                    <RadioButton Content="Single Layout (all in one layout)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=SingleLayout}"
+                                 Foreground="White" Margin="0,4"/>
+<RadioButton Content="Model Space (title blocks in grid)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=ModelSpace}"
+                             Foreground="White" Margin="0,4"/>
+                </StackPanel>
+
+                <!-- AutoCAD Status -->
+                <StackPanel Margin="0,8,0,0">
+                    <TextBlock Text="AutoCAD Status" Style="{StaticResource SectionHeader}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Version:" Foreground="#808080" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <ComboBox ItemsSource="{Binding AvailableAutoCADVersions}"
+                                  SelectedItem="{Binding SelectedAutoCADVersion}"
+                                  Style="{StaticResource ModernComboBox}"
+                                  Width="80"
+                                  IsEnabled="{Binding IsAutoCADAvailable}"/>
+                        <TextBlock Text="{Binding AutoCADVersion, StringFormat='Detected: {0}'}"
+                                   Foreground="#10B981"
+                                   VerticalAlignment="Center"
+                                   Margin="8,0,0,0"
+                                   Visibility="{Binding IsAutoCADAvailable, Converter={StaticResource BoolToVisibleConverter}}"/>
+                    </StackPanel>
+                    <Border Background="#2D2D30" BorderBrush="#FFB900" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,8,0,0"
+                            Visibility="{Binding IsAutoCADAvailable, Converter={StaticResource BoolToHiddenConverter}}">
+                        <TextBlock Text="AutoCAD not detected. Only Individual export available. Install AutoCAD 2020-2026 to enable merge features." TextWrapping="Wrap" Foreground="#FFB900"/>
+                    </Border>
+                </StackPanel>
+
+        <!-- Options -->
+        <TextBlock Text="Options" Style="{StaticResource SectionHeader}"/>
+        <CheckBox Content="Auto-Bind XRefs" IsChecked="{Binding AutoBindXRef}" Style="{StaticResource ModernCheckBox}"/>
+        <CheckBox Content="Smart View Scale" IsChecked="{Binding SmartViewScale}" Style="{StaticResource ModernCheckBox}"/>
+        <CheckBox Content="Open after export" IsChecked="{Binding OpenAfterExport}" Style="{StaticResource ModernCheckBox}"/>
+        <CheckBox Content="Progress always on top" IsChecked="{Binding ProgressAlwaysOnTop}" Style="{StaticResource ModernCheckBox}"/>
+
+        <!-- Sort Order -->
+        <TextBlock Text="Sort By" Style="{StaticResource SectionHeader}"/>
+        <ComboBox ItemsSource="{Binding AvailableSortModes}"
+                  SelectedItem="{Binding SelectedSortMode}"
+                  Style="{StaticResource ModernComboBox}"/>
+
+        <!-- Vertical Alignment -->
+        <TextBlock Text="Vertical Alignment" Style="{StaticResource SectionHeader}"/>
+        <ComboBox ItemsSource="{Binding AvailableVerticalAlignments}"
+                  SelectedItem="{Binding SelectedVerticalAlignment}"
+                  Style="{StaticResource ModernComboBox}"/>
+
+        <!-- File Name Template -->
+        <TextBlock Text="File Name Template" Style="{StaticResource SectionHeader}"/>
+        <TextBox Text="{Binding FileNameTemplate, UpdateSourceTrigger=PropertyChanged}"
+                 Style="{StaticResource ModernTextBox}"
+                 ToolTip="Available tokens: {SheetNumber}, {SheetName}, {Revision}"/>
+
+                <!-- DWG Post-Processing -->
+                <TextBlock Text="DWG Post-Processing" Style="{StaticResource SectionHeader}"/>
+                <CheckBox Content="Combine adjacent text" IsChecked="{Binding CombineAdjacentText}" Style="{StaticResource ModernCheckBox}"
+                    ToolTip="Merge nearby text objects into single text (AutoCAD required)"/>
+                <CheckBox Content="Convert raster to OLE" IsChecked="{Binding ConvertRasterToOle}" Style="{StaticResource ModernCheckBox}"
+                    ToolTip="Convert raster images to OLE objects (AutoCAD required)"/>
+                <CheckBox Content="Update scale labels" IsChecked="{Binding UpdateScaleLabels}" Style="{StaticResource ModernCheckBox}"
+                    ToolTip="Fix viewport scale text in exported DWG (AutoCAD required)"/>
+                <CheckBox Content="Flatten Z to 0" IsChecked="{Binding FlattenZ}" Style="{StaticResource ModernCheckBox}"
+                    ToolTip="Flatten all entity Z-coordinates to 0 for clean 2D output"/>
+                <CheckBox Content="Purge unused data" IsChecked="{Binding PurgeDrawing}" Style="{StaticResource ModernCheckBox}"
+                    ToolTip="Deep purge: unused blocks, layers, styles, materials, zero-length curves, empty text"/>
+                <CheckBox Content="Strip MText formatting" IsChecked="{Binding StripTextFormatting}" Style="{StaticResource ModernCheckBox}"
+                    ToolTip="Remove inline formatting codes from MText, keep plain text content"/>
+            <CheckBox Content="Audit drawing" IsChecked="{Binding AuditDrawing}" Style="{StaticResource ModernCheckBox}"
+            ToolTip="Run AUDIT + initial purge before other post-processing"/>
+            <CheckBox Content="Preserve coincident lines" IsChecked="{Binding PreserveCoincidentLines}" Style="{StaticResource ModernCheckBox}"
+            ToolTip="Keep overlapping lines in the exported DWG instead of merging them"/>
+            <CheckBox Content="Create subfolders per sheet" IsChecked="{Binding CreateSubfolders}" Style="{StaticResource ModernCheckBox}"
+            ToolTip="Organize exported files into subfolders based on sheet discipline"/>
+
+        <!-- Export Button -->
+                <Button Content="Export" Command="{Binding ExportCommand}"
+                        Style="{StaticResource ModernButton}" Margin="0,24,0,0" Height="40"/>
+                <Button Content="Cancel" Command="{Binding CancelExportCommand}"
+                        Style="{StaticResource SecondaryButton}" Margin="0,8,0,0" Height="40"
+                        Visibility="{Binding IsExporting, Converter={StaticResource BoolToVisibleConverter}}"/>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Window>

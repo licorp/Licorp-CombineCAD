@@ -1,0 +1,114 @@
+using System;
+using System.Diagnostics;
+using Autodesk.Revit.Attributes;
+using Autodesk.Revit.DB;
+using Autodesk.Revit.UI;
+using Licorp_CombineCAD.Models;
+using Licorp_CombineCAD.Views;
+
+namespace Licorp_CombineCAD.Commands
+{
+    [Transaction(TransactionMode.Manual)]
+    public class ExportMultiLayoutCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        {
+            return ExportCommandBase.Execute(commandData, ExportMode.MultiLayout, ref message);
+        }
+    }
+
+    [Transaction(TransactionMode.Manual)]
+    public class ExportIndividualCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        {
+            return ExportCommandBase.Execute(commandData, ExportMode.Individual, ref message);
+        }
+    }
+
+    [Transaction(TransactionMode.Manual)]
+    public class ExportSingleLayoutCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        {
+            return ExportCommandBase.Execute(commandData, ExportMode.SingleLayout, ref message);
+        }
+    }
+
+    [Transaction(TransactionMode.Manual)]
+    public class ExportModelSpaceCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        {
+            return ExportCommandBase.Execute(commandData, ExportMode.ModelSpace, ref message);
+        }
+    }
+
+    [Transaction(TransactionMode.Manual)]
+    public class LayerManagerCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        {
+            try
+            {
+                var uiDoc = commandData.Application.ActiveUIDocument;
+                if (uiDoc == null)
+                {
+                    TaskDialog.Show("CombineCAD", "Please open a document first.");
+                    return Result.Cancelled;
+                }
+
+                var dialog = new LayerManagerDialog(uiDoc);
+                dialog.Show();
+                return Result.Succeeded;
+            }
+            catch (Exception ex)
+            {
+                message = ex.Message;
+                Debug.WriteLine($"[CombineCAD] LayerManager error: {ex}");
+                return Result.Failed;
+            }
+        }
+    }
+
+    internal static class ExportCommandBase
+    {
+        public static Result Execute(ExternalCommandData commandData, ExportMode mode, ref string message)
+        {
+            try
+            {
+                Debug.WriteLine($"[CombineCAD] Export command: {mode}");
+
+                var uiDoc = commandData.Application.ActiveUIDocument;
+                if (uiDoc == null)
+                {
+                    TaskDialog.Show("CombineCAD", "Please open a document first.");
+                    return Result.Cancelled;
+                }
+
+                var doc = uiDoc.Document;
+
+                var collector = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSheet))
+                    .WhereElementIsNotElementType();
+
+                if (collector.GetElementCount() == 0)
+                {
+                    TaskDialog.Show("CombineCAD", "No sheets found in the current document.");
+                    return Result.Cancelled;
+                }
+
+                var dialog = new ExportDialog(uiDoc, mode);
+                dialog.Show();
+
+                return Result.Succeeded;
+            }
+            catch (Exception ex)
+            {
+                message = ex.Message;
+                Debug.WriteLine($"[CombineCAD] Export error: {ex}");
+                return Result.Failed;
+            }
+        }
+    }
+}

@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Company>Licorp</Company>
+    <Authors>Licorp</Authors>
+    <Version>1.0.0</Version>
+    <Description>Licorp CombineCAD - Export Revit sheets to DWG with multi-layout merge</Description>
+    <AddInId>F7A3B2C1-4D5E-6F78-9A0B-C1D2E3F4A5B6</AddInId>
+    <VendorId>LICORP</VendorId>
+    <VendorDescription>Licorp, licorp.vn</VendorDescription>
+  </PropertyGroup>
+</Project>
