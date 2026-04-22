@@ -13,7 +13,7 @@ namespace Licorp_CombineCAD.Models
         // ===== Output =====
         private string _outputFolder = "";
         private string _fileNameTemplate = "{SheetNumber} - {SheetName}";
-        private ExportMode _exportMode = ExportMode.Individual;
+        private ExportMode _exportMode = ExportMode.MultiLayout;
 
         // ===== DWG Options =====
         private string _dwgExportSetupName = "";

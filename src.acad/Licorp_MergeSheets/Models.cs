@@ -7,6 +7,7 @@ namespace Licorp_MergeSheets
         public string Mode { get; set; }
         public string OutputPath { get; set; }
         public string VerticalAlign { get; set; } = "Top";
+        public string DwgVersion { get; set; } = "Current";
         public List<SourceFile> SourceFiles { get; set; }
     }
 

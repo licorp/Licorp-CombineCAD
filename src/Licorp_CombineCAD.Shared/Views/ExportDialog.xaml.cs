@@ -13,7 +13,7 @@ namespace Licorp_CombineCAD.Views
         private Point _dragStartPoint;
         private SheetItemViewModel _dragSourceItem;
 
-        public ExportDialog(UIDocument uiDocument, ExportMode preselectedMode = ExportMode.Individual)
+        public ExportDialog(UIDocument uiDocument, ExportMode preselectedMode = ExportMode.MultiLayout)
         {
             InitializeComponent();
             var viewModel = new ExportDialogViewModel(uiDocument);

@@ -323,44 +323,23 @@ namespace Licorp_CombineCAD.Services
             }
             finally
             {
-                if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
-                {
-                    ReloadLinkedModels();
-                    _unloadedLinkIds = null;
-                }
+if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
+            {
+                ReloadLinkedModels();
+                _unloadedLinkIds = null;
             }
+        }
 
-        if (settings.AutoBindXRef && result.ExportedFiles.Count > 0)
+        totalTimer.Stop();
+        Debug.WriteLine($"[DwgExport] Total export time: {totalTimer.ElapsedMilliseconds}ms for {result.ExportedFiles.Count} sheets");
+
+        if (result.FailedSheets.Count > 0)
         {
-            var bindTimer = System.Diagnostics.Stopwatch.StartNew();
-            int bindCount = 0;
-            int skipCount = 0;
-            foreach (var filePath in result.ExportedFiles)
-            {
-                if (DwgCleanupService.HasXRefFiles(filePath))
-                {
-                    AutoBindXRefsInDwg(filePath);
-                    bindCount++;
-                }
-                else
-                {
-                    skipCount++;
-                }
-            }
-            bindTimer.Stop();
-            Debug.WriteLine($"[DwgExport] XREF processing: {bindCount} bound, {skipCount} clean, {bindTimer.ElapsedMilliseconds}ms");
+            Debug.WriteLine($"[DwgExport] Failed sheets: {string.Join(", ", result.FailedSheets)}");
         }
 
-            totalTimer.Stop();
-            Debug.WriteLine($"[DwgExport] Total export time: {totalTimer.ElapsedMilliseconds}ms for {result.ExportedFiles.Count} sheets");
-
-            if (result.FailedSheets.Count > 0)
-            {
-                Debug.WriteLine($"[DwgExport] Failed sheets: {string.Join(", ", result.FailedSheets)}");
-            }
-
-            return result;
-        }
+        return result;
+    }
 
         private string ExportSingleSheet(ViewSheet viewSheet, SheetInfo sheetInfo, ExportSettings settings, DWGExportOptions options)
         {
@@ -497,128 +476,9 @@ namespace Licorp_CombineCAD.Services
             {
                 Debug.WriteLine($"[DwgExport] Error reloading links: {ex.Message}");
             }
-        }
+}
 
-        private void AutoBindXRefsInDwg(string dwgPath)
-        {
-            try
-            {
-                var xrefFiles = DwgCleanupService.GetXRefFiles(dwgPath);
-                if (xrefFiles.Length == 0)
-                {
-                    Debug.WriteLine("[DwgExport] No XREF files found — DWG is clean");
-                    return;
-                }
-
-                Debug.WriteLine($"[DwgExport] Found {xrefFiles.Length} XREF companion files");
-
-                var accorePath = AutoCadLocatorService.FindAcCoreConsole();
-                if (string.IsNullOrEmpty(accorePath))
-                {
-                    Debug.WriteLine("[DwgExport] AcCoreConsole NOT found — cannot bind XREFs");
-                    Debug.WriteLine("[DwgExport] Keeping XREF files (NOT deleting) to avoid broken references");
-                    return;
-                }
-
-                var scriptPath = Path.Combine(Path.GetTempPath(), $"BindXRef_{Guid.NewGuid()}.scr");
-                var sb = new System.Text.StringBuilder();
-
-                sb.AppendLine("_SECURELOAD 0");
-
-                for (int bindPass = 0; bindPass < 5; bindPass++)
-                {
-                    foreach (var xrefFile in xrefFiles)
-                    {
-                        var xrefName = Path.GetFileNameWithoutExtension(xrefFile);
-                        sb.AppendLine("-XREF");
-                        sb.AppendLine("B");
-                        sb.AppendLine(xrefName);
-                        sb.AppendLine("Y");
-                    }
-                }
-
-                sb.AppendLine("-PURGE");
-                sb.AppendLine("A");
-                sb.AppendLine("*");
-                sb.AppendLine("N");
-                sb.AppendLine("-PURGE");
-                sb.AppendLine("A");
-                sb.AppendLine("*");
-                sb.AppendLine("N");
-                sb.AppendLine("-PURGE");
-                sb.AppendLine("R");
-                sb.AppendLine("N");
-                sb.AppendLine("_AUDIT");
-                sb.AppendLine("_YES");
-                sb.AppendLine("QSAVE");
-                sb.AppendLine("Y");
-
-                File.WriteAllText(scriptPath, sb.ToString());
-                Debug.WriteLine($"[DwgExport] Bind script created for {xrefFiles.Length} XREFs (5 passes)");
-
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = accorePath,
-                    Arguments = $"/i \"{dwgPath}\" /s \"{scriptPath}\" /l en-US",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-
-                bool bindSuccess = false;
-                using (var process = Process.Start(startInfo))
-                {
-                    string output = "";
-                    string errors = "";
-                    try { output = process.StandardOutput.ReadToEnd(); } catch { }
-                    try { errors = process.StandardError.ReadToEnd(); } catch { }
-
-                    bool exited = process.WaitForExit(300000);
-                    if (!exited)
-                    {
-                        try { process.Kill(); } catch { }
-                        Debug.WriteLine("[DwgExport] AcCoreConsole TIMEOUT — killed process");
-                    }
-                    else
-                    {
-                        bindSuccess = process.ExitCode == 0;
-                        Debug.WriteLine($"[DwgExport] AcCoreConsole exit code: {process.ExitCode}");
-                    }
-
-                    if (!string.IsNullOrEmpty(errors))
-                        Debug.WriteLine($"[DwgExport] AcCoreConsole stderr: {errors}");
-                }
-
-                try { File.Delete(scriptPath); } catch { }
-
-                if (bindSuccess)
-                {
-                    var remaining = DwgCleanupService.GetXRefFiles(dwgPath);
-                    if (remaining.Length == 0)
-                    {
-                        Debug.WriteLine("[DwgExport] XREF bind SUCCESS — all references merged into main DWG");
-                    }
-                    else
-                    {
-                        Debug.WriteLine($"[DwgExport] XREF bind done but {remaining.Length} XREF files still exist — cleaning up");
-                        DwgCleanupService.CleanupXRefFiles(dwgPath);
-                    }
-                }
-                else
-                {
-                    Debug.WriteLine("[DwgExport] XREF bind FAILED — keeping XREF files to avoid broken references");
-                    Debug.WriteLine("[DwgExport] DWG will have XREF references that need manual bind in AutoCAD");
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[DwgExport] AutoBind error: {ex.Message}");
-                Debug.WriteLine("[DwgExport] Keeping XREF files to avoid broken references");
-            }
-        }
-
-        private string GenerateFileName(SheetInfo sheet, string template)
+    private string GenerateFileName(SheetInfo sheet, string template)
         {
             string fileName = template
                 .Replace("{SheetNumber}", sheet.SheetNumber ?? "")

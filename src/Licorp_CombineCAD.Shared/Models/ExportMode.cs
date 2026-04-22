@@ -6,11 +6,6 @@ namespace Licorp_CombineCAD.Models
     public enum ExportMode
     {
         /// <summary>
-        /// Export each sheet as individual DWG file
-        /// </summary>
-        Individual,
-
-        /// <summary>
         /// Export sheets to individual DWGs then merge into 1 file with multiple layouts
         /// (each sheet = 1 layout in AutoCAD)
         /// Requires AutoCAD (AcCoreConsole.exe)

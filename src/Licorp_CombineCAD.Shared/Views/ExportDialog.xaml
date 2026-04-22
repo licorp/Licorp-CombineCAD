@@ -190,18 +190,16 @@
                   SelectedItem="{Binding SelectedDwgVersion}"
                   Style="{StaticResource ModernComboBox}"/>
 
-                <!-- Export Mode -->
-                <TextBlock Text="Export Mode" Style="{StaticResource SectionHeader}"/>
-                <StackPanel>
-                    <RadioButton Content="Individual DWG (each sheet)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Individual}"
-                                 Foreground="White" Margin="0,4"/>
-                    <RadioButton Content="Multi-Layout (merged, multiple layouts)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=MultiLayout}"
-                                 Foreground="White" Margin="0,4"/>
-                    <RadioButton Content="Single Layout (all in one layout)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=SingleLayout}"
-                                 Foreground="White" Margin="0,4"/>
-<RadioButton Content="Model Space (title blocks in grid)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=ModelSpace}"
-                             Foreground="White" Margin="0,4"/>
-                </StackPanel>
+<!-- Export Mode -->
+    <TextBlock Text="Export Mode" Style="{StaticResource SectionHeader}"/>
+    <StackPanel>
+        <RadioButton Content="Multi-Layout (merged, multiple layouts)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=MultiLayout}"
+        Foreground="White" Margin="0,4"/>
+        <RadioButton Content="Single Layout (all in one layout)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=SingleLayout}"
+        Foreground="White" Margin="0,4"/>
+        <RadioButton Content="Model Space (title blocks in grid)" IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=ModelSpace}"
+        Foreground="White" Margin="0,4"/>
+    </StackPanel>
 
                 <!-- AutoCAD Status -->
                 <StackPanel Margin="0,8,0,0">
@@ -250,26 +248,12 @@
                  Style="{StaticResource ModernTextBox}"
                  ToolTip="Available tokens: {SheetNumber}, {SheetName}, {Revision}"/>
 
-                <!-- DWG Post-Processing -->
-                <TextBlock Text="DWG Post-Processing" Style="{StaticResource SectionHeader}"/>
-                <CheckBox Content="Combine adjacent text" IsChecked="{Binding CombineAdjacentText}" Style="{StaticResource ModernCheckBox}"
-                    ToolTip="Merge nearby text objects into single text (AutoCAD required)"/>
-                <CheckBox Content="Convert raster to OLE" IsChecked="{Binding ConvertRasterToOle}" Style="{StaticResource ModernCheckBox}"
-                    ToolTip="Convert raster images to OLE objects (AutoCAD required)"/>
-                <CheckBox Content="Update scale labels" IsChecked="{Binding UpdateScaleLabels}" Style="{StaticResource ModernCheckBox}"
-                    ToolTip="Fix viewport scale text in exported DWG (AutoCAD required)"/>
-                <CheckBox Content="Flatten Z to 0" IsChecked="{Binding FlattenZ}" Style="{StaticResource ModernCheckBox}"
-                    ToolTip="Flatten all entity Z-coordinates to 0 for clean 2D output"/>
-                <CheckBox Content="Purge unused data" IsChecked="{Binding PurgeDrawing}" Style="{StaticResource ModernCheckBox}"
-                    ToolTip="Deep purge: unused blocks, layers, styles, materials, zero-length curves, empty text"/>
-                <CheckBox Content="Strip MText formatting" IsChecked="{Binding StripTextFormatting}" Style="{StaticResource ModernCheckBox}"
-                    ToolTip="Remove inline formatting codes from MText, keep plain text content"/>
-            <CheckBox Content="Audit drawing" IsChecked="{Binding AuditDrawing}" Style="{StaticResource ModernCheckBox}"
-            ToolTip="Run AUDIT + initial purge before other post-processing"/>
-            <CheckBox Content="Preserve coincident lines" IsChecked="{Binding PreserveCoincidentLines}" Style="{StaticResource ModernCheckBox}"
-            ToolTip="Keep overlapping lines in the exported DWG instead of merging them"/>
-            <CheckBox Content="Create subfolders per sheet" IsChecked="{Binding CreateSubfolders}" Style="{StaticResource ModernCheckBox}"
-            ToolTip="Organize exported files into subfolders based on sheet discipline"/>
+<!-- DWG Post-Processing -->
+    <TextBlock Text="DWG Post-Processing" Style="{StaticResource SectionHeader}"/>
+    <CheckBox Content="Preserve coincident lines" IsChecked="{Binding PreserveCoincidentLines}" Style="{StaticResource ModernCheckBox}"
+        ToolTip="Keep overlapping lines in the exported DWG instead of merging them"/>
+    <CheckBox Content="Create subfolders per sheet" IsChecked="{Binding CreateSubfolders}" Style="{StaticResource ModernCheckBox}"
+        ToolTip="Organize exported files into subfolders based on sheet discipline"/>
 
         <!-- Export Button -->
                 <Button Content="Export" Command="{Binding ExportCommand}"

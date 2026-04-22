@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Licorp_CombineCAD.Services;
 
 namespace Licorp_CombineCAD
 {
@@ -13,7 +14,10 @@ namespace Licorp_CombineCAD
     {
         public Result OnStartup(UIControlledApplication application)
         {
-            Debug.WriteLine("[CombineCAD] OnStartup started");
+            Logger.Initialize();
+            Logger.LogSection("LICORP_COMBINECAD Add-in Starting");
+            Logger.LogInfo($"Revit Version: {application.ControlledApplication.VersionNumber}");
+            Logger.LogInfo($"UI Culture: {System.Globalization.CultureInfo.CurrentUICulture.Name}");
 
             string assemblyPath = Assembly.GetExecutingAssembly().Location;
             if (string.IsNullOrEmpty(assemblyPath))
@@ -35,17 +39,17 @@ namespace Licorp_CombineCAD
                 }
             }
 
-            Debug.WriteLine("[CombineCAD] Assembly path: " + assemblyPath);
+            Logger.LogInfo($"Assembly path: {assemblyPath}");
 
             string tabName = "Licorp";
             try
             {
                 application.CreateRibbonTab(tabName);
-                Debug.WriteLine("[CombineCAD] Created ribbon tab: " + tabName);
+                Logger.LogInfo($"Created ribbon tab: {tabName}");
             }
             catch
             {
-                Debug.WriteLine("[CombineCAD] Ribbon tab already exists: " + tabName);
+                Logger.LogWarning($"Ribbon tab already exists: {tabName}");
             }
 
             RibbonPanel panel = application.CreateRibbonPanel(tabName, "Combine CAD");
@@ -67,18 +71,7 @@ namespace Licorp_CombineCAD
             var multiBtn = splitButton.AddPushButton(multiLayoutData);
             SetButtonIcon(multiBtn, "multi_layout", Colors.DodgerBlue);
 
-            var individualData = new PushButtonData(
-                "ExportIndividual",
-                "Individual\nDWG",
-                assemblyPath,
-                $"{ns}.ExportIndividualCommand");
-            individualData.ToolTip = "Export each sheet as a separate DWG file";
-            individualData.LongDescription = "Export each selected sheet to its own DWG file. " +
-                "Auto-binds XREFs to create clean single files.";
-            var indBtn = splitButton.AddPushButton(individualData);
-            SetButtonIcon(indBtn, "individual", Colors.MediumSeaGreen);
-
-            var singleLayoutData = new PushButtonData(
+var singleLayoutData = new PushButtonData(
                 "ExportSingleLayout",
                 "Single Layout\nDWG",
                 assemblyPath,
@@ -109,12 +102,14 @@ namespace Licorp_CombineCAD
             var layerBtn = panel.AddItem(layerData) as PushButton;
             SetButtonIcon(layerBtn, "layers", Colors.Gold);
 
-            Debug.WriteLine("[CombineCAD] Ribbon setup completed");
+            Logger.LogInfo("Ribbon setup completed");
+            Logger.LogSection("Add-in Ready");
             return Result.Succeeded;
         }
 
         public Result OnShutdown(UIControlledApplication application)
         {
+            Logger.LogInfo("Add-in shutting down");
             return Result.Succeeded;
         }
 

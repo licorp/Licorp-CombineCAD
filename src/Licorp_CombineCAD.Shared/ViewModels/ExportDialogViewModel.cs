@@ -31,7 +31,7 @@ namespace Licorp_CombineCAD.ViewModels
         private string _filterText = "";
         private string _selectedSetup;
         private string _outputFolder;
-        private ExportMode _exportMode = ExportMode.Individual;
+        private ExportMode _exportMode = ExportMode.MultiLayout;
         private bool _autoBindXRef = true;
         private bool _smartViewScale = false;
         private bool _openAfterExport = false;
@@ -198,58 +198,9 @@ namespace Licorp_CombineCAD.ViewModels
         {
             get => _fileNameTemplate;
             set { _fileNameTemplate = value; OnPropertyChanged(); }
-        }
+}
 
-        private bool _combineAdjacentText;
-        public bool CombineAdjacentText
-        {
-            get => _combineAdjacentText;
-            set { _combineAdjacentText = value; OnPropertyChanged(); }
-        }
-
-        private bool _convertRasterToOle;
-        public bool ConvertRasterToOle
-        {
-            get => _convertRasterToOle;
-            set { _convertRasterToOle = value; OnPropertyChanged(); }
-        }
-
-        private bool _updateScaleLabels;
-        public bool UpdateScaleLabels
-        {
-            get => _updateScaleLabels;
-            set { _updateScaleLabels = value; OnPropertyChanged(); }
-        }
-
-        private bool _flattenZ;
-        public bool FlattenZ
-        {
-            get => _flattenZ;
-            set { _flattenZ = value; OnPropertyChanged(); }
-        }
-
-        private bool _purgeDrawing;
-        public bool PurgeDrawing
-        {
-            get => _purgeDrawing;
-            set { _purgeDrawing = value; OnPropertyChanged(); }
-        }
-
-        private bool _stripTextFormatting;
-        public bool StripTextFormatting
-        {
-            get => _stripTextFormatting;
-            set { _stripTextFormatting = value; OnPropertyChanged(); }
-        }
-
-        private bool _auditDrawing;
-        public bool AuditDrawing
-        {
-            get => _auditDrawing;
-            set { _auditDrawing = value; OnPropertyChanged(); }
-        }
-
-        private bool _preserveCoincidentLines;
+    private bool _preserveCoincidentLines;
         public bool PreserveCoincidentLines
         {
             get => _preserveCoincidentLines;
@@ -366,23 +317,23 @@ namespace Licorp_CombineCAD.ViewModels
             if (IsExporting || SelectedCount == 0 || string.IsNullOrEmpty(OutputFolder))
                 return false;
 
-            if (ExportMode != ExportMode.Individual && !IsAutoCADAvailable)
-                return false;
+if (!IsAutoCADAvailable)
+            return false;
 
-            return true;
-        }
+        return true;
+    }
 
-        private void ValidateExportMode()
+    private void ValidateExportMode()
+    {
+        if (!IsAutoCADAvailable)
         {
-            if (ExportMode != ExportMode.Individual && !IsAutoCADAvailable)
-            {
-                StatusMessage = "AutoCAD not detected. Only Individual export available.";
-            }
-            else
-            {
-                StatusMessage = "";
-            }
+            StatusMessage = "AutoCAD not detected. Merge features require AutoCAD.";
         }
+        else
+        {
+            StatusMessage = "";
+        }
+    }
 
         private void CheckAutoCADAvailability()
         {
@@ -489,14 +440,15 @@ namespace Licorp_CombineCAD.ViewModels
 
         string fileToOpen = null;
 
-        if (exportedFiles.Count > 0 && ExportMode != ExportMode.Individual)
+        if (exportedFiles.Count > 0)
         {
             _progressVm.UpdatePhase("Merging");
 
-            var accorePath = AutoCadLocatorService.FindAcCoreConsole(SelectedAutoCADVersion);
-            var mergeService = new DwgMergeService(accorePath);
-            mergeService.SetVerticalAlignment(settings.VerticalAlign.ToString());
-            var layoutNames = selectedSheets.Select(s => $"{s.SheetNumber} - {s.SheetName}").ToList();
+var accorePath = AutoCadLocatorService.FindAcCoreConsole(SelectedAutoCADVersion);
+                var mergeService = new DwgMergeService(accorePath);
+                mergeService.SetVerticalAlignment(settings.VerticalAlign.ToString());
+                mergeService.SetDwgVersion(settings.DwgVersion ?? "Current");
+                var layoutNames = selectedSheets.Select(s => $"{s.SheetNumber} - {s.SheetName}").ToList();
             var outputPath = GetUniqueOutputPath();
 
             bool mergeSuccess = false;
@@ -513,106 +465,35 @@ namespace Licorp_CombineCAD.ViewModels
                     break;
             }
 
-            if (mergeSuccess)
+if (mergeSuccess)
             {
                 StatusMessage = $"Merged {exportedFiles.Count} files to {Path.GetFileName(outputPath)}";
-
-                if (ExportMode == ExportMode.MultiLayout)
-                {
-                    try
-                    {
-                        var sheetSetService = new SheetSetService();
-                        var dstPath = Path.ChangeExtension(outputPath, ".dst");
-                        sheetSetService.CreateSheetSet(outputPath, layoutNames, dstPath);
-                        Debug.WriteLine($"[Export] Sheet Set created: {dstPath}");
-                    }
-                    catch (Exception dstEx)
-                    {
-                        Debug.WriteLine($"[Export] DST creation error: {dstEx.Message}");
-                    }
-                }
-
-            if (CombineAdjacentText || ConvertRasterToOle || UpdateScaleLabels || FlattenZ || PurgeDrawing || StripTextFormatting || AuditDrawing)
-            {
-                _progressVm.UpdatePhase("Post-Processing");
-                var postProcessService = new DwgPostProcessService(accorePath);
-                if (postProcessService.IsAvailable)
-                {
-                    postProcessService.PostProcess(outputPath, new DwgPostProcessOptions
-                    {
-                        CombineAdjacentText = CombineAdjacentText,
-                        ConvertRasterToOle = ConvertRasterToOle,
-                        UpdateScaleLabels = UpdateScaleLabels,
-                        FlattenZ = FlattenZ,
-                        PurgeDrawing = PurgeDrawing,
-                        StripTextFormatting = StripTextFormatting,
-                        AuditDrawing = AuditDrawing
-                    });
-                }
-            }
 
                 if (OpenAfterExport)
                     fileToOpen = outputPath;
             }
-            else
-            {
-                StatusMessage = "Merge failed. Individual files preserved.";
-                if (OpenAfterExport && exportedFiles.Count > 0)
-                    fileToOpen = exportedFiles.First();
-            }
-        }
-        else if (exportedFiles.Count > 0)
+else
         {
-            StatusMessage = $"Exported {exportedFiles.Count} files";
-
-            if (CombineAdjacentText || ConvertRasterToOle || UpdateScaleLabels || FlattenZ || PurgeDrawing || StripTextFormatting || AuditDrawing)
-            {
-                _progressVm.UpdatePhase("Post-Processing");
-                var postProcessService = new DwgPostProcessService(
-                    AutoCadLocatorService.FindAcCoreConsole(SelectedAutoCADVersion));
-                if (postProcessService.IsAvailable)
-                {
-                    foreach (var file in exportedFiles)
-                    {
-                        try
-                        {
-                            postProcessService.PostProcess(file, new DwgPostProcessOptions
-                            {
-                                CombineAdjacentText = CombineAdjacentText,
-                                ConvertRasterToOle = ConvertRasterToOle,
-                                UpdateScaleLabels = UpdateScaleLabels,
-                                FlattenZ = FlattenZ,
-                                PurgeDrawing = PurgeDrawing,
-                                StripTextFormatting = StripTextFormatting,
-                                AuditDrawing = AuditDrawing
-                            });
-                        }
-                        catch (Exception ppEx)
-                        {
-                            Debug.WriteLine($"[Export] Post-process error for {file}: {ppEx.Message}");
-                        }
-                    }
-                }
-            }
-
-            if (OpenAfterExport)
+            StatusMessage = "Merge failed.";
+            if (OpenAfterExport && exportedFiles.Count > 0)
                 fileToOpen = exportedFiles.First();
         }
+    }
 
-        _progressVm.StopTimer();
-        _progressVm.Completed = true;
-        SaveSettings();
+    _progressVm.StopTimer();
+    _progressVm.Completed = true;
+    SaveSettings();
 
-        Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-        {
-            try { _progressDialog.Close(); } catch { }
-        }));
-        await Task.Delay(500);
+    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+    {
+        try { _progressDialog.Close(); } catch { }
+    }));
+    await Task.Delay(500);
 
-        if (fileToOpen != null)
-            await OpenWithAutoCADAsync(fileToOpen);
-            }
-            catch (OperationCanceledException)
+    if (fileToOpen != null)
+        await OpenWithAutoCADAsync(fileToOpen);
+}
+catch (OperationCanceledException)
             {
                 StatusMessage = "Export cancelled.";
                 Debug.WriteLine("[Export] Cancelled by user");
@@ -687,28 +568,21 @@ namespace Licorp_CombineCAD.ViewModels
             };
         }
 
-        private void SaveSettings()
-        {
-            _profile.OutputFolder = OutputFolder;
-            _profile.SelectedSetup = SelectedSetup;
-            _profile.ExportMode = ExportMode.ToString();
-            _profile.DwgVersion = SelectedDwgVersion;
-            _profile.FileNameTemplate = FileNameTemplate;
-            _profile.AutoBindXRef = AutoBindXRef;
-            _profile.SmartViewScale = SmartViewScale;
+private void SaveSettings()
+    {
+        _profile.OutputFolder = OutputFolder;
+        _profile.SelectedSetup = SelectedSetup;
+        _profile.ExportMode = ExportMode.ToString();
+        _profile.DwgVersion = SelectedDwgVersion;
+        _profile.FileNameTemplate = FileNameTemplate;
+        _profile.AutoBindXRef = AutoBindXRef;
+        _profile.SmartViewScale = SmartViewScale;
         _profile.OpenAfterExport = OpenAfterExport;
-        _profile.CombineAdjacentText = CombineAdjacentText;
-        _profile.ConvertRasterToOle = ConvertRasterToOle;
-        _profile.UpdateScaleLabels = UpdateScaleLabels;
-        _profile.FlattenZ = FlattenZ;
-        _profile.PurgeDrawing = PurgeDrawing;
-        _profile.StripTextFormatting = StripTextFormatting;
-        _profile.AuditDrawing = AuditDrawing;
         _profile.PreserveCoincidentLines = PreserveCoincidentLines;
         _profile.CreateSubfolders = CreateSubfolders;
         _profile.LastUsed = DateTime.Now;
-            _profileService.SaveLastProfile(_profile);
-        }
+        _profileService.SaveLastProfile(_profile);
+    }
 
         private void LoadProfileSettings()
         {
@@ -724,16 +598,9 @@ namespace Licorp_CombineCAD.ViewModels
             if (!string.IsNullOrEmpty(_profile.FileNameTemplate))
                 FileNameTemplate = _profile.FileNameTemplate;
 
-            AutoBindXRef = _profile.AutoBindXRef;
-            SmartViewScale = _profile.SmartViewScale;
-            OpenAfterExport = _profile.OpenAfterExport;
-        CombineAdjacentText = _profile.CombineAdjacentText;
-        ConvertRasterToOle = _profile.ConvertRasterToOle;
-        UpdateScaleLabels = _profile.UpdateScaleLabels;
-        FlattenZ = _profile.FlattenZ;
-        PurgeDrawing = _profile.PurgeDrawing;
-        StripTextFormatting = _profile.StripTextFormatting;
-        AuditDrawing = _profile.AuditDrawing;
+AutoBindXRef = _profile.AutoBindXRef;
+        SmartViewScale = _profile.SmartViewScale;
+        OpenAfterExport = _profile.OpenAfterExport;
         PreserveCoincidentLines = _profile.PreserveCoincidentLines;
         CreateSubfolders = _profile.CreateSubfolders;
     }

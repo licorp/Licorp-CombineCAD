@@ -16,74 +16,141 @@ namespace Licorp_MergeSheets
         {
             try
             {
-                Debug.WriteLine("[Merger] Starting MultiLayout merge");
+                AcadLogger.LogSection("MergeToMultiLayout");
+                AcadLogger.LogInfo($"Output path: {config.OutputPath}");
+                AcadLogger.LogInfo($"Source files: {config.SourceFiles?.Count ?? 0}");
+
+                if (config.SourceFiles == null || config.SourceFiles.Count == 0)
+                {
+                    AcadLogger.LogError("No source files provided");
+                    return false;
+                }
+
+                string baseFile = null;
+                foreach (var sf in config.SourceFiles)
+                {
+                    if (File.Exists(sf.Path))
+                    {
+                        baseFile = sf.Path;
+                        AcadLogger.LogInfo($"Using base file: {baseFile}");
+                        break;
+                    }
+                }
+
+                if (baseFile == null)
+                {
+                    AcadLogger.LogError("No valid source files found");
+                    return false;
+                }
 
                 var outputDb = new Database(false, true);
 
                 using (outputDb)
                 {
-                    outputDb.ReadDwgFile(config.OutputPath, FileShare.ReadWrite, true, "");
+                    outputDb.ReadDwgFile(baseFile, FileShare.ReadWrite, true, "");
+                    AcadLogger.LogInfo("Base file opened successfully");
 
-                    using (var outputTrans = outputDb.TransactionManager.StartTransaction())
+                    int clonedCount = 0;
+                    int layoutIndex = 1;
+
+                    foreach (var source in config.SourceFiles)
                     {
-                        var outputBt = (BlockTable)outputTrans.GetObject(outputDb.BlockTableId, OpenMode.ForRead);
-
-                        int layoutIndex = 1;
-                        foreach (var source in config.SourceFiles)
+                        if (!File.Exists(source.Path))
                         {
-                            if (!File.Exists(source.Path))
-                            {
-                                Debug.WriteLine($"[Merger] Source not found: {source.Path}");
-                                continue;
-                            }
-
-                            Debug.WriteLine($"[Merger] Processing: {Path.GetFileName(source.Path)}");
-
-                            var sourceDb = new Database(false, true);
-                            using (sourceDb)
-                            {
-                                sourceDb.ReadDwgFile(source.Path, FileShare.Read, true, "");
-
-using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
-                    {
-                    var sourcePsr = GetSourcePaperSpace(sourceDb, sourceTrans);
-
-                    string layoutName = source.Layout ?? $"Layout{layoutIndex}";
-
-                                    var destPsrId = CreateLayoutInCurrentDb(outputDb, outputTrans, layoutName);
-
-                                    var ids = new ObjectIdCollection();
-                                    foreach (ObjectId entId in sourcePsr)
-                                    {
-                                        ids.Add(entId);
-                                    }
-
-                                    if (ids.Count > 0)
-                                    {
-                                        var idMap = new IdMapping();
-                                        sourceDb.WblockCloneObjects(ids, destPsrId, idMap, DuplicateRecordCloning.Replace, false);
-                                        Debug.WriteLine($"[Merger] Cloned {ids.Count} entities to layout {layoutName}");
-                                    }
-
-                                    sourceTrans.Commit();
-                                }
-                            }
-
-                            layoutIndex++;
+                            AcadLogger.LogWarning($"Source not found: {source.Path}");
+                            continue;
                         }
 
-                        outputTrans.Commit();
+                        if (source.Path.Equals(baseFile, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var desiredName = source.Layout;
+                            if (!string.IsNullOrEmpty(desiredName))
+                            {
+                                RenameLayoutInDb(outputDb, "Layout1", desiredName);
+                                clonedCount++;
+                                AcadLogger.LogInfo($"Renamed base layout to '{desiredName}'");
+                            }
+                            continue;
+                        }
+
+                        AcadLogger.LogInfo($"Processing: {Path.GetFileName(source.Path)}");
+
+                        var sourceDb = new Database(false, true);
+                        using (sourceDb)
+                        {
+sourceDb.ReadDwgFile(source.Path, FileShare.Read, true, "");
+
+                            try
+                            {
+                                var xrefIds = new ObjectIdCollection();
+                                sourceDb.BindXrefs(xrefIds, true);
+                            }
+                            catch (Exception ex) { AcadLogger.LogWarning($"BindXrefs failed: {ex.Message}"); }
+
+                            using (var srcTrans = sourceDb.TransactionManager.StartTransaction())
+                            {
+                                var srcLayoutDict = (DBDictionary)srcTrans.GetObject(
+                                    sourceDb.LayoutDictionaryId, OpenMode.ForRead);
+
+                                foreach (DBDictionaryEntry entry in srcLayoutDict)
+                                {
+                                    if (entry.Key == "Model")
+                                        continue;
+
+                                    string desiredName = source.Layout ?? entry.Key;
+                                    string sourceLayoutName = entry.Key;
+
+                                    if (LayoutExistsInDb(outputDb, desiredName))
+                                    {
+                                        AcadLogger.LogWarning($"Layout '{desiredName}' already exists, skipping");
+                                        continue;
+                                    }
+
+                                    var idsToClone = new ObjectIdCollection { entry.Value };
+                                    var mapping = new IdMapping();
+
+                                    sourceDb.WblockCloneObjects(
+                                        idsToClone,
+                                        outputDb.LayoutDictionaryId,
+                                        mapping,
+                                        DuplicateRecordCloning.Ignore,
+                                        false);
+
+                                    if (desiredName != sourceLayoutName)
+                                    {
+                                        RenameClonedLayout(outputDb, mapping, sourceLayoutName, desiredName);
+                                    }
+
+                                    CopyPlotSettings(outputDb, sourceDb, srcTrans, entry.Value, desiredName);
+
+                                    clonedCount++;
+                                    AcadLogger.LogInfo($"Cloned layout '{desiredName}' from {Path.GetFileName(source.Path)}");
+                                    break;
+                                }
+
+                                srcTrans.Commit();
+                            }
+                        }
+
+                        layoutIndex++;
                     }
 
-                    outputDb.SaveAs(config.OutputPath, DwgVersion.Current);
-                    Debug.WriteLine($"[Merger] MultiLayout completed: {config.OutputPath}");
+                    AcadLogger.LogInfo($"Total layouts cloned: {clonedCount}");
+
+                    CleanupDefaultLayouts(outputDb);
+
+                    var dwgVersion = GetDwgVersion(config.DwgVersion);
+                    outputDb.SaveAs(config.OutputPath, dwgVersion);
+                    AcadLogger.LogInfo($"Saved to: {config.OutputPath}");
                 }
 
+                AcadLogger.LogSection("MergeToMultiLayout Complete");
                 return true;
             }
             catch (System.Exception ex)
             {
-                Debug.WriteLine($"[Merger] MultiLayout error: {ex.Message}");
+                AcadLogger.LogError($"MultiLayout error: {ex.Message}");
+                AcadLogger.LogError($"Stack: {ex.StackTrace}");
                 return false;
             }
         }
@@ -92,7 +159,7 @@ using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
         {
             try
             {
-                Debug.WriteLine("[Merger] Starting SingleLayout merge");
+                AcadLogger.Log("[LayoutMerger] Starting SingleLayout merge");
 
                 var outputDb = new Database(false, true);
 
@@ -115,10 +182,13 @@ using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
                             if (!File.Exists(source.Path))
                                 continue;
 
-                            Debug.WriteLine($"[Merger] Processing: {Path.GetFileName(source.Path)}");
+                            AcadLogger.Log($"[LayoutMerger] Processing: {Path.GetFileName(source.Path)}");
 
                             var sourceDb = new Database(false, true);
                             sourceDb.ReadDwgFile(source.Path, FileShare.Read, true, "");
+
+                            try { var xrefIds = new ObjectIdCollection(); sourceDb.BindXrefs(xrefIds, true); }
+                            catch (Exception ex) { AcadLogger.LogWarning($"BindXrefs failed: {ex.Message}"); }
 
                             using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
                             {
@@ -186,7 +256,7 @@ using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
                             }
 
                             xOffset += width + LayoutSpacing;
-                            Debug.WriteLine($"[Merger] Offset by ({xOffset}, {yOffset})");
+                            AcadLogger.Log($"[LayoutMerger] Offset by ({xOffset}, {yOffset})");
                         }
 
                         outputTrans.Commit();
@@ -197,15 +267,16 @@ using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
                         try { allSourceDbs[i].Dispose(); } catch { }
                     }
 
-                    outputDb.SaveAs(config.OutputPath, DwgVersion.Current);
-                    Debug.WriteLine($"[Merger] SingleLayout completed: {config.OutputPath}");
+                    var dwgVersion = GetDwgVersion(config.DwgVersion);
+                    outputDb.SaveAs(config.OutputPath, dwgVersion);
+                    AcadLogger.Log($"[LayoutMerger] SingleLayout completed: {config.OutputPath}");
                 }
 
                 return true;
             }
             catch (System.Exception ex)
             {
-                Debug.WriteLine($"[Merger] SingleLayout error: {ex.Message}");
+                AcadLogger.Log($"[LayoutMerger] SingleLayout error: {ex.Message}");
                 return false;
             }
         }
@@ -214,7 +285,7 @@ using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
         {
             try
             {
-                Debug.WriteLine("[Merger] Starting ModelSpace merge");
+                AcadLogger.Log("[LayoutMerger] Starting ModelSpace merge");
 
                 var outputDb = new Database(false, true);
 
@@ -235,45 +306,48 @@ using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
                             if (!File.Exists(source.Path))
                                 continue;
 
-                            Debug.WriteLine($"[Merger] Processing: {Path.GetFileName(source.Path)}");
+                            AcadLogger.Log($"[LayoutMerger] Processing: {Path.GetFileName(source.Path)}");
 
                             var sourceDb = new Database(false, true);
                             using (sourceDb)
                             {
                                 sourceDb.ReadDwgFile(source.Path, FileShare.Read, true, "");
 
-using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
-                    {
-                    var sourcePsr = GetSourcePaperSpace(sourceDb, sourceTrans);
+                                try { var xrefIds = new ObjectIdCollection(); sourceDb.BindXrefs(xrefIds, true); }
+                                catch (Exception ex) { AcadLogger.LogWarning($"BindXrefs failed: {ex.Message}"); }
 
-                    var ids = new ObjectIdCollection();
-                    foreach (ObjectId entId in sourcePsr)
-                    {
-                        ids.Add(entId);
-                    }
+                                using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
+                                {
+                                    var sourcePsr = GetSourcePaperSpace(sourceDb, sourceTrans);
 
-                    if (ids.Count > 0)
-                    {
-                        var idMap = new IdMapping();
-                        sourceDb.WblockCloneObjects(ids, modelSpaceId, idMap, DuplicateRecordCloning.Replace, false);
+                                    var ids = new ObjectIdCollection();
+                                    foreach (ObjectId entId in sourcePsr)
+                                    {
+                                        ids.Add(entId);
+                                    }
 
-                        var ext = GetExtents(sourcePsr);
-                        double xOffset = col * (ext.MaxPoint.X - ext.MinPoint.X + LayoutSpacing * 2);
-                        double yOffset = -row * (ext.MaxPoint.Y - ext.MinPoint.Y + LayoutSpacing * 2);
+                                    if (ids.Count > 0)
+                                    {
+                                        var idMap = new IdMapping();
+                                        sourceDb.WblockCloneObjects(ids, modelSpaceId, idMap, DuplicateRecordCloning.Replace, false);
 
-                        foreach (ObjectId id in ids)
-                        {
-                            var ent = (Entity)outputTrans.GetObject(id, OpenMode.ForWrite);
-                            if (ent != null)
-                            {
-                                ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOffset - ext.MinPoint.Y, 0)));
-                            }
-                        }
+                                        var ext = GetExtents(sourcePsr);
+                                        double xOffset = col * (ext.MaxPoint.X - ext.MinPoint.X + LayoutSpacing * 2);
+                                        double yOffset = -row * (ext.MaxPoint.Y - ext.MinPoint.Y + LayoutSpacing * 2);
 
-                        Debug.WriteLine($"[Merger] Placed at ({xOffset}, {yOffset})");
-                    }
+                                        foreach (ObjectId id in ids)
+                                        {
+                                            var ent = (Entity)outputTrans.GetObject(id, OpenMode.ForWrite);
+                                            if (ent != null)
+                                            {
+                                                ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOffset - ext.MinPoint.Y, 0)));
+                                            }
+                                        }
 
-                    sourceTrans.Commit();
+                                        AcadLogger.Log($"[LayoutMerger] Placed at ({xOffset}, {yOffset})");
+                                    }
+
+                                    sourceTrans.Commit();
                                 }
                             }
 
@@ -288,28 +362,178 @@ using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
                         outputTrans.Commit();
                     }
 
-                    outputDb.SaveAs(config.OutputPath, DwgVersion.Current);
-                    Debug.WriteLine($"[Merger] ModelSpace completed: {config.OutputPath}");
+                    var dwgVersion = GetDwgVersion(config.DwgVersion);
+                    outputDb.SaveAs(config.OutputPath, dwgVersion);
+                    AcadLogger.Log($"[LayoutMerger] ModelSpace completed: {config.OutputPath}");
                 }
 
                 return true;
             }
             catch (System.Exception ex)
             {
-                Debug.WriteLine($"[Merger] ModelSpace error: {ex.Message}");
+                AcadLogger.Log($"[LayoutMerger] ModelSpace error: {ex.Message}");
                 return false;
             }
         }
 
-        private ObjectId CreateLayoutInCurrentDb(Database db, Transaction trans, string layoutName)
+        private void CopyPlotSettings(Database destDb, Database srcDb, Transaction srcTrans, ObjectId srcLayoutId, string destLayoutName)
         {
-            var lt = (LayoutManager)LayoutManager.Current;
+            try
+            {
+                var srcLayout = (Layout)srcTrans.GetObject(srcLayoutId, OpenMode.ForRead);
 
-            var layoutId = lt.CreateLayout(layoutName);
-            lt.CurrentLayout = layoutName;
+                using (var destTr = destDb.TransactionManager.StartTransaction())
+                {
+                    var layoutDict = (DBDictionary)destTr.GetObject(destDb.LayoutDictionaryId, OpenMode.ForRead);
 
-            var layout = (Layout)trans.GetObject(layoutId, OpenMode.ForRead);
-            return layout.BlockTableRecordId;
+                    if (layoutDict.Contains(destLayoutName))
+                    {
+                        var destLayout = (Layout)destTr.GetObject(layoutDict.GetAt(destLayoutName), OpenMode.ForWrite);
+                        destLayout.CopyFrom(srcLayout);
+                        AcadLogger.LogInfo($"Copied plot settings for '{destLayoutName}'");
+                    }
+
+                    destTr.Commit();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"CopyPlotSettings error: {ex.Message}");
+            }
+        }
+
+        private void EnsureLayoutNameAvailable(Database db, string name)
+        {
+            try
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var layoutDict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForWrite);
+                    if (layoutDict.Contains(name))
+                    {
+                        layoutDict.Remove(name);
+                        AcadLogger.Log($"[LayoutMerger] Removed existing layout '{name}'");
+                    }
+                    tr.Commit();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.Log($"[LayoutMerger] EnsureLayoutNameAvailable error: {ex.Message}");
+            }
+        }
+
+        private void RenameClonedLayout(Database db, IdMapping mapping, string oldName, string newName)
+        {
+            try
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var layoutDict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+
+                    if (layoutDict.Contains(oldName))
+                    {
+                        var layoutId = layoutDict.GetAt(oldName);
+                        var layout = (Layout)tr.GetObject(layoutId, OpenMode.ForWrite);
+                        layout.LayoutName = newName;
+                        AcadLogger.Log($"[LayoutMerger] Renamed layout '{oldName}' to '{newName}'");
+                    }
+                    else if (layoutDict.Contains(newName))
+                    {
+                        AcadLogger.Log($"[LayoutMerger] Layout already named '{newName}'");
+                    }
+
+                    tr.Commit();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.Log($"[LayoutMerger] RenameClonedLayout error: {ex.Message}");
+            }
+        }
+
+        private bool LayoutExistsInDb(Database db, string layoutName)
+        {
+            try
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var layoutDict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+                    return layoutDict.Contains(layoutName);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void RenameLayoutInDb(Database db, string oldName, string newName)
+        {
+            try
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var layoutDict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+
+                    if (layoutDict.Contains(oldName))
+                    {
+                        var layoutId = layoutDict.GetAt(oldName);
+                        var layout = (Layout)tr.GetObject(layoutId, OpenMode.ForWrite);
+                        layout.LayoutName = newName;
+                        AcadLogger.Log($"[LayoutMerger] Renamed layout '{oldName}' to '{newName}'");
+                    }
+
+                    tr.Commit();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.Log($"[LayoutMerger] RenameLayoutInDb error: {ex.Message}");
+            }
+        }
+
+        private void CleanupDefaultLayouts(Database db)
+        {
+            try
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var layouts = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForWrite);
+                    var layoutsToDelete = new List<string>();
+
+                    foreach (var entry in layouts)
+                    {
+                        if (entry.Key == "Model")
+                            continue;
+
+                        var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
+                        var btrId = layout.BlockTableRecordId;
+
+                        if (btrId == ObjectId.Null)
+                        {
+                            layoutsToDelete.Add(entry.Key);
+                            continue;
+                        }
+
+                        var btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
+                        if (!btr.GetEnumerator().MoveNext())
+                            layoutsToDelete.Add(entry.Key);
+                    }
+
+                    foreach (var name in layoutsToDelete)
+                    {
+                        layouts.Remove(name);
+                        AcadLogger.Log($"[LayoutMerger] Deleted extra layout '{name}'");
+                    }
+
+                    tr.Commit();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.Log($"[LayoutMerger] CleanupDefaultLayouts error: {ex.Message}");
+            }
         }
 
         private BlockTableRecord GetSourcePaperSpace(Database sourceDb, Transaction sourceTrans)
@@ -331,35 +555,58 @@ using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
             }
             catch (System.Exception ex)
             {
-                Debug.WriteLine($"[Merger] Error getting Paper Space: {ex.Message}");
+                AcadLogger.Log($"[LayoutMerger] Error getting Paper Space: {ex.Message}");
             }
 
-            Debug.WriteLine("[Merger] Fallback to Model Space");
+            AcadLogger.Log("[LayoutMerger] Fallback to Model Space");
             return (BlockTableRecord)sourceTrans.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(sourceDb), OpenMode.ForRead);
         }
 
-    private Extents3d GetExtents(BlockTableRecord btr)
+        private Extents3d GetExtents(BlockTableRecord btr)
         {
             double minX = double.MaxValue, minY = double.MaxValue;
             double maxX = double.MinValue, maxY = double.MinValue;
 
             foreach (ObjectId id in btr)
             {
-                var ent = (Entity)id.GetObject(OpenMode.ForRead);
-                if (ent != null)
+                try
                 {
-                    var ext = ent.GeometricExtents;
-                    if (ext.MinPoint.X < minX) minX = ext.MinPoint.X;
-                    if (ext.MinPoint.Y < minY) minY = ext.MinPoint.Y;
-                    if (ext.MaxPoint.X > maxX) maxX = ext.MaxPoint.X;
-                    if (ext.MaxPoint.Y > maxY) maxY = ext.MaxPoint.Y;
+                    var ent = (Entity)id.GetObject(OpenMode.ForRead);
+                    if (ent != null)
+                    {
+                        var ext = ent.GeometricExtents;
+                        if (ext.MinPoint.X < minX) minX = ext.MinPoint.X;
+                        if (ext.MinPoint.Y < minY) minY = ext.MinPoint.Y;
+                        if (ext.MaxPoint.X > maxX) maxX = ext.MaxPoint.X;
+                        if (ext.MaxPoint.Y > maxY) maxY = ext.MaxPoint.Y;
+                    }
                 }
+                catch { }
             }
 
             if (minX == double.MaxValue)
                 return new Extents3d(new Point3d(0, 0, 0), new Point3d(0, 0, 0));
 
             return new Extents3d(new Point3d(minX, minY, 0), new Point3d(maxX, maxY, 0));
+        }
+
+        private DwgVersion GetDwgVersion(string version)
+        {
+            if (string.IsNullOrEmpty(version) || version == "Current")
+                return DwgVersion.Current;
+
+            switch (version)
+            {
+                case "AC1027": return DwgVersion.AC1027;
+                case "AC1024": return DwgVersion.AC1024;
+                case "AC1021": return DwgVersion.AC1021;
+                case "AC1015": return DwgVersion.AC1015;
+                case "AC1014": return DwgVersion.AC1014;
+                case "AC1012": return DwgVersion.AC1012;
+                default:
+                    AcadLogger.Log($"[LayoutMerger] Unknown DwgVersion '{version}', using Current");
+                    return DwgVersion.Current;
+            }
         }
     }
 }

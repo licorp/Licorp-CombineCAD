@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,27 +15,33 @@ namespace Licorp_CombineCAD.Services
     /// single layout (SingleLayout), or Model Space export.
     /// Core feature — requires AutoCAD/AcCoreConsole + Licorp_MergeSheets plugin.
     /// </summary>
-    public class DwgMergeService
+public class DwgMergeService
+{
+    private readonly string _accoreconsolePath;
+    private readonly string _pluginPath;
+    private string _verticalAlign = "Top";
+    private string _dwgVersion = "Current";
+
+    public DwgMergeService(string accoreconsolePath = null)
     {
-        private readonly string _accoreconsolePath;
-        private readonly string _pluginPath;
-        private string _verticalAlign = "Top";
+        _accoreconsolePath = accoreconsolePath ?? AutoCadLocatorService.FindAcCoreConsole();
 
-        public DwgMergeService(string accoreconsolePath = null)
-        {
-            _accoreconsolePath = accoreconsolePath ?? AutoCadLocatorService.FindAcCoreConsole();
+var pluginDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                @"Autodesk\ApplicationPlugins\Licorp_MergeSheets.bundle");
+            _pluginPath = Path.Combine(pluginDir, "Contents", "Licorp_MergeSheets.dll");
+    }
 
-            var pluginDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            @"Autodesk\ApplicationPlugins\Licorp_MergeSheets.bundle");
-            _pluginPath = Path.Combine(pluginDir, "Licorp_MergeSheets.dll");
-        }
+    public bool IsAvailable => !string.IsNullOrEmpty(_accoreconsolePath);
 
-        public bool IsAvailable => !string.IsNullOrEmpty(_accoreconsolePath) || IsAutoCADComAvailable();
+    public bool IsPluginLoaded => File.Exists(_pluginPath);
 
-        public bool IsPluginLoaded => File.Exists(_pluginPath);
+    public void SetDwgVersion(string version)
+    {
+        _dwgVersion = version ?? "Current";
+    }
 
-        public void SetVerticalAlignment(string alignment)
+    public void SetVerticalAlignment(string alignment)
         {
             _verticalAlign = alignment ?? "Top";
         }
@@ -56,7 +61,7 @@ namespace Licorp_CombineCAD.Services
                     Directory.CreateDirectory(pluginDir);
                 }
 
-                var sourceDll = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Licorp_MergeSheets.dll");
+                var sourceDll = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "acad", "Release", "Licorp_MergeSheets.dll");
                 if (File.Exists(sourceDll))
                 {
                     File.Copy(sourceDll, _pluginPath, true);
@@ -212,47 +217,55 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
-        private string CreateMergeConfig(List<string> dwgFiles, List<string> layoutNames, string outputPath, string mode)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("{");
-            sb.AppendLine($"  \"Mode\": \"{mode}\",");
-            sb.AppendLine($"  \"OutputPath\": \"{outputPath.Replace("\\", "\\\\")}\",");
-            sb.AppendLine($"  \"VerticalAlign\": \"{_verticalAlign}\",");
-            sb.AppendLine("  \"SourceFiles\": [");
-
-            for (int i = 0; i < dwgFiles.Count; i++)
-            {
-                var comma = i < dwgFiles.Count - 1 ? "," : "";
-                sb.AppendLine($"    {{ \"Path\": \"{dwgFiles[i].Replace("\\", "\\\\")}\", \"Layout\": \"{(layoutNames != null && i < layoutNames.Count ? layoutNames[i] : $"Layout{i + 1}")}\" }}{comma}");
-            }
-
-            sb.AppendLine("  ]");
-            sb.AppendLine("}");
-            return sb.ToString();
-        }
-
-    private void CreateMergeScript(string scriptPath, string configPath, string outputPath)
+private string CreateMergeConfig(List<string> dwgFiles, List<string> layoutNames, string outputPath, string mode)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("_SECURELOAD 0");
-        sb.AppendLine("NETLOAD");
-        sb.AppendLine($"\"{_pluginPath}\"");
-        sb.AppendLine("_LICORP_MERGESHEETS");
-        sb.AppendLine($"\"{configPath}\"");
-        sb.AppendLine("_AUDIT");
-        sb.AppendLine("_YES");
-        sb.AppendLine("-PURGE");
-        sb.AppendLine("A");
-        sb.AppendLine("*");
-        sb.AppendLine("N");
-        sb.AppendLine("-PURGE");
-        sb.AppendLine("A");
-        sb.AppendLine("*");
-        sb.AppendLine("N");
-        sb.AppendLine($"_SAVEAS");
-        sb.AppendLine($"2018");
-        sb.AppendLine($"\"{outputPath}\"");
+        sb.AppendLine("{");
+        sb.AppendLine($" \"Mode\": \"{mode}\",");
+        sb.AppendLine($" \"OutputPath\": \"{outputPath.Replace("\\", "\\\\")}\",");
+        sb.AppendLine($" \"VerticalAlign\": \"{_verticalAlign}\",");
+        sb.AppendLine($" \"DwgVersion\": \"{_dwgVersion}\",");
+        sb.AppendLine(" \"SourceFiles\": [");
+
+        for (int i = 0; i < dwgFiles.Count; i++)
+        {
+            var comma = i < dwgFiles.Count - 1 ? "," : "";
+            sb.AppendLine($" {{ \"Path\": \"{dwgFiles[i].Replace("\\", "\\\\")}\", \"Layout\": \"{(layoutNames != null && i < layoutNames.Count ? layoutNames[i] : $"Layout{i + 1}")}\" }}{comma}");
+        }
+
+sb.AppendLine(" ]");
+        sb.AppendLine("}");
+        return sb.ToString();
+    }
+
+private void CreateMergeScript(string scriptPath, string configPath, string outputPath)
+    {
+        var sb = new StringBuilder();
+
+        var bundleDir = Path.GetDirectoryName(Path.GetDirectoryName(_pluginPath));
+        bool bundleExists = File.Exists(Path.Combine(bundleDir, "PackageContents.xml"));
+
+        var silentConfigPath = Path.Combine(Path.GetTempPath(), "Licorp_MergeSheets_Config.json");
+        File.Copy(configPath, silentConfigPath, true);
+
+        if (!bundleExists)
+        {
+            sb.AppendLine("_SECURELOAD");
+            sb.AppendLine("0");
+            sb.AppendLine("NETLOAD");
+            sb.AppendLine($"\"{_pluginPath}\"");
+            sb.AppendLine("_LICORP_MERGESHEETS");
+            sb.AppendLine($"\"{configPath}\"");
+        }
+        else
+        {
+            sb.AppendLine("_SECURELOAD");
+            sb.AppendLine("0");
+            sb.AppendLine("NETLOAD");
+            sb.AppendLine($"\"{_pluginPath}\"");
+            sb.AppendLine("_LICORP_MERGESHEETS");
+        }
+
         sb.AppendLine("QUIT");
         sb.AppendLine("Y");
         File.WriteAllText(scriptPath, sb.ToString());
@@ -262,18 +275,13 @@ namespace Licorp_CombineCAD.Services
         {
             try
             {
-                if (!string.IsNullOrEmpty(_accoreconsolePath))
-                {
-                    return await RunAcCoreConsoleInternalAsync(scriptPath, inputPath, outputPath, timeoutMs, cancellationToken);
-                }
+if (!string.IsNullOrEmpty(_accoreconsolePath))
+            {
+                return await RunAcCoreConsoleInternalAsync(scriptPath, inputPath, outputPath, timeoutMs, cancellationToken);
+            }
 
-                if (IsAutoCADComAvailable())
-                {
-                    return await Task.Run(() => RunViaComAutomation(scriptPath, inputPath, outputPath, timeoutMs), cancellationToken);
-                }
-
-                Debug.WriteLine("[Merge] Neither AcCoreConsole nor AutoCAD COM available");
-                return false;
+            Debug.WriteLine("[Merge] AcCoreConsole not available");
+            return false;
             }
             catch (OperationCanceledException)
             {
@@ -344,98 +352,10 @@ namespace Licorp_CombineCAD.Services
                 Debug.WriteLine($"[Merge] Console error: {ex.Message}");
                 return false;
             }
-        }
+}
+}
 
-        [DllImport("oleaut32.dll", PreserveSig = false)]
-        [return: MarshalAs(UnmanagedType.IDispatch)]
-        private static extern object OleGetActiveObject(
-            [In, MarshalAs(UnmanagedType.LPStruct)] Guid clsid);
-
-        private static object ComGetActiveObject(string progId)
-        {
-            try
-            {
-                var type = Type.GetTypeFromProgID(progId);
-                if (type == null) return null;
-                return OleGetActiveObject(type.GUID);
-            }
-            catch { return null; }
-        }
-
-        private bool RunViaComAutomation(string scriptPath, string inputPath, string outputPath, int timeoutMs)
-        {
-            try
-            {
-                Debug.WriteLine("[Merge] Attempting COM Automation fallback");
-                object acadObj = ComGetActiveObject("AutoCAD.Application");
-
-                if (acadObj == null)
-                {
-                    try
-                    {
-                        var type = Type.GetTypeFromProgID("AutoCAD.Application");
-                        if (type == null)
-                        {
-                            Debug.WriteLine("[Merge] AutoCAD COM ProgID not found");
-                            return false;
-                        }
-                        acadObj = Activator.CreateInstance(type);
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"[Merge] AutoCAD COM not available: {ex.Message}");
-                        return false;
-                    }
-                }
-
-                if (acadObj == null) return false;
-
-                dynamic acadApp = acadObj;
-                acadApp.Visible = true;
-                dynamic doc = acadApp.Documents.Open(inputPath);
-                Thread.Sleep(2000);
-
-                string scriptContent = File.ReadAllText(scriptPath);
-                string[] lines = scriptContent.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-                foreach (var line in lines)
-                {
-                    var trimmed = line.Trim();
-                    if (string.IsNullOrEmpty(trimmed)) continue;
-                    doc.SendCommand(trimmed + " ");
-                    Thread.Sleep(500);
-                }
-
-                var sw = Stopwatch.StartNew();
-                while (sw.ElapsedMilliseconds < timeoutMs)
-                {
-                    Thread.Sleep(1000);
-                    if (File.Exists(outputPath)) break;
-                }
-
-                try { doc.Close(false); } catch { }
-
-                return File.Exists(outputPath);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[Merge] COM Automation error: {ex.Message}");
-                return false;
-            }
-        }
-
-        private bool IsAutoCADComAvailable()
-        {
-            try
-            {
-                var type = Type.GetTypeFromProgID("AutoCAD.Application");
-                return type != null;
-            }
-            catch { }
-            return false;
-        }
-    }
-
-    public class MergeProgressInfo
+public class MergeProgressInfo
     {
         public string Phase { get; set; }
         public string CurrentItem { get; set; }
