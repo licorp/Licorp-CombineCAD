@@ -18,7 +18,8 @@ function Deploy-RevitAddin {
     $dllSource = Join-Path $BinFolder "R2025\Release\Licorp_CombineCAD.dll"
     $addinSource = Join-Path $PSScriptRoot "Licorp_CombineCAD.addin"
 
-    $bundleDest = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_CombineCAD"
+    $bundleDest = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_CombineCAD\R2025"
+    $addinDir = "$env:PROGRAMDATA\Autodesk\Revit\Addins\2025"
     $wrongBundle = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_CombineCAD.bundle"
 
     # Clean up wrong folder if exists
@@ -31,25 +32,44 @@ function Deploy-RevitAddin {
         if (!(Test-Path $bundleDest)) {
             New-Item -ItemType Directory -Path $bundleDest -Force | Out-Null
         }
+        if (!(Test-Path $addinDir)) {
+            New-Item -ItemType Directory -Path $addinDir -Force | Out-Null
+        }
 
         if (Test-Path $dllSource) {
             Copy-Item $dllSource -Destination $bundleDest -Force
-            Write-Host " DLL: $dllSource" -ForegroundColor Gray
+            Copy-Item (Join-Path (Split-Path $dllSource) "*") -Destination $bundleDest -Recurse -Force
+            Write-Host " DLLs: $dllSource" -ForegroundColor Gray
         } else {
             Write-Host " DLL not found: $dllSource (build R2025 project first)" -ForegroundColor Red
             return
         }
 
-        if (Test-Path $addinSource) {
-            Copy-Item $addinSource -Destination $bundleDest -Force
-            Write-Host " ADDIN: $addinSource" -ForegroundColor Gray
-        }
+        $addinContent = @"
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Licorp CombineCAD</Name>
+    <Assembly>$bundleDest\Licorp_CombineCAD.dll</Assembly>
+    <AddInId>F7A3B2C1-4D5E-6F78-9A0B-C1D2E3F4A5B6</AddInId>
+    <FullClassName>Licorp_CombineCAD.App</FullClassName>
+    <VendorId>LICORP</VendorId>
+    <VendorDescription>Licorp - Export Revit sheets to DWG with multi-layout merge</VendorDescription>
+  </AddIn>
+</RevitAddIns>
+"@
+        Set-Content -Path "$addinDir\Licorp_CombineCAD.addin" -Value $addinContent
+        Write-Host " ADDIN: $addinDir\Licorp_CombineCAD.addin" -ForegroundColor Gray
 
         Write-Host " Installed: $bundleDest" -ForegroundColor Green
     } else {
         if (Test-Path $bundleDest) {
             Remove-Item $bundleDest -Recurse -Force
             Write-Host " Uninstalled: $bundleDest" -ForegroundColor Yellow
+        }
+        if (Test-Path "$addinDir\Licorp_CombineCAD.addin") {
+            Remove-Item "$addinDir\Licorp_CombineCAD.addin" -Force
+            Write-Host " Uninstalled: $addinDir\Licorp_CombineCAD.addin" -ForegroundColor Yellow
         }
     }
 }

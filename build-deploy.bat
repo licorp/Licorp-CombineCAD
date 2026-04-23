@@ -64,34 +64,36 @@ echo.
 
 for %%v in (R2020 R2021 R2022 R2023 R2024 R2025 R2026 R2027) do (
     set "RV=%%v"
-    set "RV=!RV:R=!"
+    set "RV_NUM=!RV:R=!"
     set "SRC=%ROOT%bin\%%v\Release"
-    set "DST=C:\ProgramData\Autodesk\ApplicationPlugins\Licorp_CombineCAD"
+    set "DST=C:\ProgramData\Autodesk\ApplicationPlugins\Licorp_CombineCAD\%%v"
+    set "ADDIN_DIR=C:\ProgramData\Autodesk\Revit\Addins\!RV_NUM!"
 
     if not exist "!DST!" mkdir "!DST!"
+    if not exist "!ADDIN_DIR!" mkdir "!ADDIN_DIR!"
 
     if exist "!SRC!\Licorp_CombineCAD.dll" (
         REM Copy ALL files (DLLs, deps.json, runtimes, etc.)
         xcopy "!SRC!\*" "!DST!\" /E /Y /Q /I >nul 2>&1
 
-REM Create .addin manifest
-    (
-    echo ^<?xml version="1.0" encoding="utf-8" standalone="no"?^>
-    echo ^<RevitAddIns^>
-    echo ^<AddIn Type="Application"^>
-    echo ^<Name^>Licorp CombineCAD^</Name^>
-    echo ^<Assembly^>C:\ProgramData\Autodesk\ApplicationPlugins\Licorp_CombineCAD\Licorp_CombineCAD.dll^</Assembly^>
-    echo ^<AddInId^>F7A3B2C1-4D5E-6F78-9A0B-C1D2E3F4A5B6^</AddInId^>
-    echo ^<FullClassName^>Licorp_CombineCAD.App^</FullClassName^>
-    echo ^<VendorId^>LICORP^</VendorId^>
-    echo ^<VendorDescription^>Licorp - Export Revit sheets to DWG with multi-layout merge^</VendorDescription^>
-    echo ^</AddIn^>
-    echo ^</RevitAddIns^>
-    ) > "!DST!\Licorp_CombineCAD.addin"
+        REM Create .addin manifest
+        (
+        echo ^<?xml version="1.0" encoding="utf-8" standalone="no"?^>
+        echo ^<RevitAddIns^>
+        echo ^<AddIn Type="Application"^>
+        echo ^<Name^>Licorp CombineCAD^</Name^>
+        echo ^<Assembly^>!DST!\Licorp_CombineCAD.dll^</Assembly^>
+        echo ^<AddInId^>F7A3B2C1-4D5E-6F78-9A0B-C1D2E3F4A5B6^</AddInId^>
+        echo ^<FullClassName^>Licorp_CombineCAD.App^</FullClassName^>
+        echo ^<VendorId^>LICORP^</VendorId^>
+        echo ^<VendorDescription^>Licorp - Export Revit sheets to DWG with multi-layout merge^</VendorDescription^>
+        echo ^</AddIn^>
+        echo ^</RevitAddIns^>
+        ) > "!ADDIN_DIR!\Licorp_CombineCAD.addin"
 
-        echo       Revit !RV! - DLLs + .addin + libs
+        echo       Revit !RV_NUM! - DLLs + .addin + libs
     ) else (
-        echo       Revit !RV! - WARNING: Build output not found
+        echo       Revit !RV_NUM! - WARNING: Build output not found
     )
 )
 
@@ -151,3 +153,4 @@ echo  ========================================
 echo.
 pause
 exit /b 1
+
