@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using Autodesk.Revit.DB;
 using Licorp_CombineCAD.Models;
@@ -45,6 +46,30 @@ namespace Licorp_CombineCAD.ViewModels
         public bool HasNoView => _model.HasNoView;
 
         public string DisplayText => $"{SheetNumber} - {SheetName}";
+
+        public string StatusText
+        {
+            get
+            {
+                if (HasNoView)
+                    return "No views";
+                if (_model.ViewScales != null && _model.ViewScales.Distinct().Count() > 1)
+                    return "Mixed scale";
+                return "OK";
+            }
+        }
+
+        public string StatusToolTip
+        {
+            get
+            {
+                if (HasNoView)
+                    return "No model viewport detected. This sheet can still export title blocks, schedules, images, and annotations.";
+                if (_model.ViewScales != null && _model.ViewScales.Distinct().Count() > 1)
+                    return "Multiple view scales detected on this sheet.";
+                return "Ready for export.";
+            }
+        }
 
         public event PropertyChangedEventHandler PropertyChanged;
 

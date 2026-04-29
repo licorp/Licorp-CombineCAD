@@ -219,8 +219,7 @@ namespace Licorp_CombineCAD.Services
 
                     if (sheet.HasNoView)
                     {
-                        result.SkippedSheets.Add(sheet.SheetNumber);
-                        continue;
+                        Trace.WriteLine($"[DwgExport] {sheet.SheetNumber} has no model viewport; exporting sheet content anyway.");
                     }
 
                     try
@@ -263,6 +262,7 @@ namespace Licorp_CombineCAD.Services
                         if (!string.IsNullOrEmpty(filePath))
                         {
                             result.ExportedFiles.Add(filePath);
+                            result.ExportedSheets.Add(sheet);
                             Trace.WriteLine($"[DwgExport] {sheet.SheetNumber} exported in {sheetTimer.ElapsedMilliseconds}ms");
                         }
                         else
@@ -454,8 +454,14 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             }
 }
 
-    private string GenerateFileName(SheetInfo sheet, string template)
+    public static string GenerateFileName(SheetInfo sheet, string template)
         {
+            if (sheet == null)
+                return "";
+
+            if (string.IsNullOrWhiteSpace(template))
+                template = "{SheetNumber} - {SheetName}";
+
             string fileName = template
                 .Replace("{SheetNumber}", sheet.SheetNumber ?? "")
                 .Replace("{SheetName}", sheet.SheetName ?? "")
@@ -466,7 +472,11 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                 fileName = fileName.Replace(c, '-');
             }
 
-            return fileName.Trim();
+            fileName = fileName.Trim();
+            if (string.IsNullOrWhiteSpace(fileName))
+                fileName = !string.IsNullOrWhiteSpace(sheet.SheetNumber) ? sheet.SheetNumber : "Sheet";
+
+            return fileName;
         }
 
         private void EnsureOutputFolder(string folder)

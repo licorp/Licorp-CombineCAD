@@ -146,6 +146,13 @@
                     <DataGridTextColumn Header="Revision" Binding="{Binding Revision}" Width="80" IsReadOnly="True"/>
                     <DataGridTextColumn Header="Size" Binding="{Binding PaperSize}" Width="60" IsReadOnly="True"/>
                     <DataGridTextColumn Header="Scale" Binding="{Binding ScaleText}" Width="80" IsReadOnly="True"/>
+                    <DataGridTextColumn Header="Status" Binding="{Binding StatusText}" Width="90" IsReadOnly="True">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="ToolTip" Value="{Binding StatusToolTip}"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
                 </DataGrid.Columns>
             </DataGrid>
 

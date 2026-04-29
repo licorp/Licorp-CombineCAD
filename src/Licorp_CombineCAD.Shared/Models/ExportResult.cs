@@ -6,6 +6,7 @@ namespace Licorp_CombineCAD.Models
     public class ExportResult
     {
         public List<string> ExportedFiles { get; set; } = new List<string>();
+        public List<SheetInfo> ExportedSheets { get; set; } = new List<SheetInfo>();
         public List<string> FailedSheets { get; set; } = new List<string>();
         public List<string> SkippedSheets { get; set; } = new List<string>();
 

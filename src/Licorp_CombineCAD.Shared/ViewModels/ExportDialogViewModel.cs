@@ -25,6 +25,7 @@ namespace Licorp_CombineCAD.ViewModels
         private readonly Document _document;
         private readonly SheetCollectorService _sheetCollector;
         private readonly DwgExportService _exportService;
+        private readonly SheetPreflightService _preflightService;
         private readonly ProfileService _profileService;
         private readonly ExportProfile _profile;
 
@@ -52,6 +53,7 @@ namespace Licorp_CombineCAD.ViewModels
 
             _sheetCollector = new SheetCollectorService(_document);
             _exportService = new DwgExportService(_document);
+            _preflightService = new SheetPreflightService(_document);
             _profileService = new ProfileService();
             _profile = _profileService.LoadLastProfile();
 
@@ -239,12 +241,9 @@ namespace Licorp_CombineCAD.ViewModels
             AllSheets.Clear();
             foreach (var sheet in sheets)
             {
-                if (!sheet.HasNoView)
-                {
-                    var vm = new SheetItemViewModel(sheet);
-                    vm.PropertyChanged += OnSheetSelectionChanged;
-                    AllSheets.Add(vm);
-                }
+                var vm = new SheetItemViewModel(sheet);
+                vm.PropertyChanged += OnSheetSelectionChanged;
+                AllSheets.Add(vm);
             }
             ApplySort();
         }
@@ -272,7 +271,7 @@ namespace Licorp_CombineCAD.ViewModels
 
             if (mode == "Name")
             {
-                items = items.OrderBy(s => s.SheetName).ToList();
+                items = items.OrderBy(s => s.SheetName, new NaturalStringComparer()).ToList();
             }
             else
             {
@@ -393,6 +392,29 @@ namespace Licorp_CombineCAD.ViewModels
                 }
             }
 
+            var selectedSheets = AllSheets.Where(s => s.IsSelected).Select(s => s.Model).ToList();
+            var settings = BuildExportSettings();
+
+            SheetPreflightResult preflightResult;
+            try
+            {
+                preflightResult = await _revitThreadService.RunOnRevitThreadAsync(app =>
+                    _preflightService.Analyze(selectedSheets, settings));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Preflight] Failed: {ex}");
+                MessageBox.Show(
+                    $"Preflight check failed:\n{ex.Message}",
+                    "Preflight Failed",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return;
+            }
+
+            if (!ConfirmPreflight(preflightResult))
+                return;
+
             IsExporting = true;
             _cancellationTokenSource = new CancellationTokenSource();
 
@@ -404,8 +426,6 @@ namespace Licorp_CombineCAD.ViewModels
 
             try
             {
-                var selectedSheets = AllSheets.Where(s => s.IsSelected).Select(s => s.Model).ToList();
-                var settings = BuildExportSettings();
                 var options = _exportService.BuildExportOptions(settings);
 
                 var cts = _cancellationTokenSource;
@@ -442,7 +462,7 @@ namespace Licorp_CombineCAD.ViewModels
                     if (exportResult.FailedSheets.Count > 0)
                         warningMsg += $"\n\nFailed: {string.Join(", ", exportResult.FailedSheets)}";
                     if (exportResult.SkippedSheets.Count > 0)
-                        warningMsg += $"\n\nSkipped (no views): {string.Join(", ", exportResult.SkippedSheets)}";
+                        warningMsg += $"\n\nSkipped: {string.Join(", ", exportResult.SkippedSheets)}";
                     await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                     {
                         MessageBox.Show(warningMsg, "Export Warnings", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -462,7 +482,10 @@ namespace Licorp_CombineCAD.ViewModels
                         var mergeService = new DwgMergeService(accorePath);
                         mergeService.SetVerticalAlignment(settings.VerticalAlign.ToString());
                         mergeService.SetDwgVersion(settings.DwgVersion ?? "Current");
-                        var layoutNames = selectedSheets.Select(s => $"{s.SheetNumber} - {s.SheetName}").ToList();
+                        var exportedSheets = exportResult?.ExportedSheets ?? new List<SheetInfo>();
+                        var layoutNames = exportedSheets.Select(s => $"{s.SheetNumber} - {s.SheetName}").ToList();
+                        if (layoutNames.Count != exportedFiles.Count)
+                            layoutNames = exportedFiles.Select(Path.GetFileNameWithoutExtension).ToList();
                         var outputPath = GetUniqueOutputPath();
 
                         bool mergeSuccess = false;
@@ -475,7 +498,7 @@ namespace Licorp_CombineCAD.ViewModels
                                 mergeSuccess = await mergeService.MergeToSingleLayoutAsync(exportedFiles, outputPath, "Combined", null, cts.Token);
                                 break;
                             case ExportMode.ModelSpace:
-                                mergeSuccess = await mergeService.MergeToModelSpaceAsync(exportedFiles, outputPath, null, cts.Token);
+                                mergeSuccess = await mergeService.MergeToModelSpaceAsync(exportedFiles, outputPath, layoutNames, null, cts.Token);
                                 break;
                         }
 
@@ -556,6 +579,58 @@ namespace Licorp_CombineCAD.ViewModels
             return path;
         }
 
+        private bool ConfirmPreflight(SheetPreflightResult result)
+        {
+            if (result == null || !result.HasIssues)
+            {
+                StatusMessage = "Preflight passed.";
+                return true;
+            }
+
+            StatusMessage = result.Summary;
+            var message = BuildPreflightMessage(result);
+
+            if (result.HasErrors)
+            {
+                MessageBox.Show(
+                    message,
+                    "Preflight Errors",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return false;
+            }
+
+            if (result.HasWarnings)
+            {
+                var choice = MessageBox.Show(
+                    message + "\n\nContinue export?",
+                    "Preflight Warnings",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                return choice == MessageBoxResult.Yes;
+            }
+
+            return true;
+        }
+
+        private string BuildPreflightMessage(SheetPreflightResult result)
+        {
+            var lines = new List<string> { result.Summary, "" };
+            var visibleIssues = result.Issues
+                .Where(i => i.Severity != PreflightSeverity.Info)
+                .Take(16)
+                .ToList();
+
+            foreach (var issue in visibleIssues)
+                lines.Add(string.Format("[{0}] {1}: {2}", issue.Severity, issue.DisplayName, issue.Message));
+
+            var hiddenCount = result.Issues.Count(i => i.Severity != PreflightSeverity.Info) - visibleIssues.Count;
+            if (hiddenCount > 0)
+                lines.Add(string.Format("...and {0} more issue(s).", hiddenCount));
+
+            return string.Join(Environment.NewLine, lines);
+        }
+
         private void CancelExport()
         {
             _cancellationTokenSource?.Cancel();
@@ -612,6 +687,8 @@ private void SaveSettings()
         _profile.OpenAfterExport = OpenAfterExport;
         _profile.PreserveCoincidentLines = PreserveCoincidentLines;
         _profile.CreateSubfolders = CreateSubfolders;
+        _profile.SortMode = SelectedSortMode;
+        _profile.VerticalAlign = SelectedVerticalAlignment;
         _profile.LastUsed = DateTime.Now;
         _profileService.SaveLastProfile(_profile);
     }
@@ -635,6 +712,10 @@ AutoBindXRef = _profile.AutoBindXRef;
         OpenAfterExport = _profile.OpenAfterExport;
         PreserveCoincidentLines = _profile.PreserveCoincidentLines;
         CreateSubfolders = _profile.CreateSubfolders;
+        if (!string.IsNullOrEmpty(_profile.SortMode) && AvailableSortModes.Contains(_profile.SortMode))
+            SelectedSortMode = _profile.SortMode;
+        if (!string.IsNullOrEmpty(_profile.VerticalAlign) && AvailableVerticalAlignments.Contains(_profile.VerticalAlign))
+            SelectedVerticalAlignment = _profile.VerticalAlign;
     }
 
     private async Task OpenWithAutoCADAsync(string filePath)

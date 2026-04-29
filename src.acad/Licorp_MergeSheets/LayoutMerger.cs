@@ -14,6 +14,7 @@ namespace Licorp_MergeSheets
         private const string PaperBackgroundLayerName = "LICORP_PAPER_BACKGROUND";
         private const double PaperBackgroundFallbackWidth = 1066.8;
         private const double PaperBackgroundFallbackHeight = 762.0;
+        private const double ModelSpaceSheetMinGap = 100.0;
         
         // Track ModelSpace offset for each source file
         private Dictionary<string, Vector3d> _msOffsets = new Dictionary<string, Vector3d>();
@@ -162,7 +163,7 @@ namespace Licorp_MergeSheets
                         var sourceDb = new Database(false, true);
                         using (sourceDb)
                         {
-                            sourceDb.ReadDwgFile(source.Path, FileShare.Read, true, "");
+                            sourceDb.ReadDwgFile(source.Path, FileShare.ReadWrite, true, "");
                             sourceDb.CloseInput(true);
                             BindXrefsSafe(sourceDb);
 
@@ -472,7 +473,7 @@ var allClonedIds = new List<List<ObjectId>>();
                             AcadLogger.Log($"[LayoutMerger] Processing: {Path.GetFileName(source.Path)}");
 
                             var sourceDb = new Database(false, true);
-                            sourceDb.ReadDwgFile(source.Path, FileShare.Read, true, "");
+                            sourceDb.ReadDwgFile(source.Path, FileShare.ReadWrite, true, "");
                             BindXrefsSafe(sourceDb);
 
                             using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
@@ -574,85 +575,140 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
         {
             try
             {
-                AcadLogger.Log("[LayoutMerger] Starting ModelSpace merge");
+                AcadLogger.LogSection("MergeToModelSpace");
+                AcadLogger.LogInfo($"Output path: {config.OutputPath}");
+                AcadLogger.LogInfo($"Source files: {config.SourceFiles?.Count ?? 0}");
 
-                var outputDb = new Database(false, true);
+                if (config.SourceFiles == null || config.SourceFiles.Count == 0)
+                {
+                    AcadLogger.LogError("No source files provided");
+                    return false;
+                }
+
+                var validSources = config.SourceFiles.Where(f => f != null && File.Exists(f.Path)).ToList();
+                if (validSources.Count == 0)
+                {
+                    AcadLogger.LogError("No valid source file for ModelSpace merge");
+                    return false;
+                }
+
+                var outputDb = new Database(true, true);
 
                 using (outputDb)
                 {
-                    var firstFile = config.SourceFiles.FirstOrDefault(f => File.Exists(f.Path));
-                    if (firstFile == null)
-                    {
-                        AcadLogger.LogError("No valid source file for base database");
-                        return false;
-                    }
-
-                    outputDb.ReadDwgFile(firstFile.Path, FileShare.ReadWrite, true, "");
+                    double nextSheetX = 0.0;
+                    int sheetIndex = 0;
 
                     using (var outputTrans = outputDb.TransactionManager.StartTransaction())
                     {
+                        EnsurePaperBackgroundLayer(outputDb, outputTrans);
+
                         var modelSpaceId = SymbolUtilityServices.GetBlockModelSpaceId(outputDb);
                         var modelSpace = (BlockTableRecord)outputTrans.GetObject(modelSpaceId, OpenMode.ForWrite);
 
-                        int cols = (int)Math.Ceiling(Math.Sqrt(config.SourceFiles.Count));
-                        int row = 0, col = 0;
-
-                        foreach (var source in config.SourceFiles)
+                        foreach (var source in validSources)
                         {
-                            if (!File.Exists(source.Path)) continue;
+                            sheetIndex++;
+                            string label = string.IsNullOrWhiteSpace(source.Layout)
+                                ? Path.GetFileNameWithoutExtension(source.Path)
+                                : source.Layout;
 
-                            AcadLogger.Log($"[LayoutMerger] Processing: {Path.GetFileName(source.Path)}");
+                            AcadLogger.LogSection($"MODELSPACE SHEET {sheetIndex}/{validSources.Count}: {label}");
+                            AcadLogger.LogInfo($"Source: {source.Path}");
 
                             var sourceDb = new Database(false, true);
                             using (sourceDb)
                             {
-                                sourceDb.ReadDwgFile(source.Path, FileShare.Read, true, "");
+                                sourceDb.ReadDwgFile(source.Path, FileShare.ReadWrite, true, "");
+                                sourceDb.CloseInput(true);
                                 BindXrefsSafe(sourceDb);
 
                                 using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
                                 {
-                                    var sourcePsr = GetSourcePaperSpace(sourceDb, sourceTrans);
+                                    RenameBlocksInDb(sourceDb, sourceTrans, $"MS{sheetIndex}_");
 
-                                    var ids = new ObjectIdCollection();
-                                    foreach (ObjectId entId in sourcePsr)
+                                    var sourceLayout = GetSourceLayout(sourceDb, sourceTrans, source.Layout);
+                                    var sourcePaperSpace = sourceLayout != null
+                                        ? (BlockTableRecord)sourceTrans.GetObject(sourceLayout.BlockTableRecordId, OpenMode.ForRead)
+                                        : GetSourcePaperSpace(sourceDb, sourceTrans);
+
+                                    var sourceViewports = CollectModelViewportInfos(
+                                        sourceTrans,
+                                        sourcePaperSpace,
+                                        $"MODELSPACE source viewports: {label}");
+
+                                    int paperExtentEntityCount;
+                                    var sourcePaperBounds = GetModelSpaceSheetBounds(
+                                        sourceLayout,
+                                        sourcePaperSpace,
+                                        sourceTrans,
+                                        sourceViewports,
+                                        out paperExtentEntityCount);
+
+                                    double sheetWidth = Math.Max(1.0, sourcePaperBounds.MaxPoint.X - sourcePaperBounds.MinPoint.X);
+                                    double sheetHeight = Math.Max(1.0, sourcePaperBounds.MaxPoint.Y - sourcePaperBounds.MinPoint.Y);
+                                    var placement = new Vector3d(nextSheetX - sourcePaperBounds.MinPoint.X, -sourcePaperBounds.MinPoint.Y, 0.0);
+
+                                    AcadLogger.LogInfo(
+                                        $"MODELSPACE placement: label='{label}', bounds={FormatExtents(sourcePaperBounds)}, " +
+                                        $"paperExtentEntities={paperExtentEntityCount}, placement={FormatVector(placement)}");
+
+                                    var placedIds = new List<ObjectId>();
+                                    int backgroundCount = CreateModelSpaceSheetBackground(
+                                        outputDb,
+                                        outputTrans,
+                                        modelSpace,
+                                        sourcePaperBounds,
+                                        placedIds);
+
+                                    int paperCloneCount = ClonePaperEntitiesToModelSpace(
+                                        sourceDb,
+                                        sourceTrans,
+                                        outputDb,
+                                        outputTrans,
+                                        sourcePaperSpace,
+                                        modelSpace,
+                                        placedIds,
+                                        label);
+
+                                    int bakedCount = 0;
+                                    if (sourceViewports.Count > 0)
                                     {
-                                        ids.Add(entId);
+                                        bakedCount = BakeModelViewsToPaperSpace(
+                                            sourceDb,
+                                            sourceTrans,
+                                            outputDb,
+                                            outputTrans,
+                                            modelSpace,
+                                            sourceViewports,
+                                            label,
+                                            placedIds);
+                                    }
+                                    else
+                                    {
+                                        AcadLogger.LogWarning($"MODELSPACE: '{label}' has no usable model viewport; only paper-space content was cloned");
                                     }
 
-                                    if (ids.Count > 0)
-                                    {
-                                        var idMap = new IdMapping();
-                                        sourceDb.WblockCloneObjects(ids, modelSpaceId, idMap, DuplicateRecordCloning.Ignore, false);
-                                        var ext = GetExtents(sourcePsr);
+                                    int movedCount = TransformEntities(outputTrans, placedIds, Matrix3d.Displacement(placement));
+                                    MoveModelSpaceBackgroundsToBottom(modelSpace, outputTrans);
 
-                                        double xOffset = col * (ext.MaxPoint.X - ext.MinPoint.X + LayoutSpacing * 2);
-                                        double yOffset = -row * (ext.MaxPoint.Y - ext.MinPoint.Y + LayoutSpacing * 2);
+                                    AcadLogger.LogInfo(
+                                        $"MODELSPACE summary: '{label}' background={backgroundCount}, paperClones={paperCloneCount}, " +
+                                        $"bakedModelClones={bakedCount}, moved={movedCount}, finalOriginX={nextSheetX:F2}, " +
+                                        $"size=({sheetWidth:F2},{sheetHeight:F2})");
 
-                                        foreach (ObjectId id in ids)
-                                        {
-                                            ObjectId destId = ObjectId.Null;
-                                            if (idMap.Contains(id)) destId = idMap[id].Value;
-                                            if (destId.IsNull) continue;
-
-                                            var ent = (Entity)outputTrans.GetObject(destId, OpenMode.ForWrite);
-                                            if (ent != null)
-                                            {
-                                                ent.TransformBy(Matrix3d.Displacement(
-                                                    new Vector3d(xOffset - ext.MinPoint.X, yOffset - ext.MinPoint.Y, 0)));
-                                            }
-                                        }
-                                    }
+                                    double gap = Math.Max(ModelSpaceSheetMinGap, sheetWidth * 0.05);
+                                    nextSheetX += sheetWidth + gap;
                                     sourceTrans.Commit();
                                 }
                             }
-
-                            col++;
-                            if (col >= cols) { col = 0; row++; }
                         }
+
                         outputTrans.Commit();
                     }
 
-                    RegenerateLayouts(outputDb, "ModelSpace");
+                    CleanupDefaultLayouts(outputDb);
+                    RegenerateModelSpace(outputDb);
 
                     var dwgVersion = GetDwgVersion(config.DwgVersion);
                     outputDb.SaveAs(config.OutputPath, dwgVersion);
@@ -664,6 +720,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             catch (System.Exception ex)
             {
                 AcadLogger.Log($"[LayoutMerger] ModelSpace error: {ex.Message}");
+                AcadLogger.Log($"[LayoutMerger] ModelSpace stack: {ex.StackTrace}");
                 return false;
             }
         }
@@ -928,6 +985,299 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
         {
             return Math.Abs(extents.MaxPoint.X - extents.MinPoint.X) > 1.0 ||
                    Math.Abs(extents.MaxPoint.Y - extents.MinPoint.Y) > 1.0;
+        }
+
+        private Extents3d GetModelSpaceSheetBounds(
+            Layout layout,
+            BlockTableRecord paperSpace,
+            Transaction tr,
+            IReadOnlyList<ViewportInfo> viewports,
+            out int extentEntities)
+        {
+            var bounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities);
+            bool hasBounds = IsUsableExtents(bounds);
+
+            if (viewports != null)
+            {
+                foreach (var vp in viewports)
+                {
+                    var viewportPaperWindow = GetViewportPaperExtents(vp);
+                    if (IsUsableExtents(viewportPaperWindow))
+                    {
+                        bounds = hasBounds ? CombineExtents(bounds, viewportPaperWindow) : viewportPaperWindow;
+                        hasBounds = true;
+                    }
+                }
+            }
+
+            if (layout != null && layout.PlotPaperSize.X > 1.0 && layout.PlotPaperSize.Y > 1.0)
+            {
+                var plotBounds = new Extents3d(
+                    new Point3d(0.0, 0.0, 0.0),
+                    new Point3d(layout.PlotPaperSize.X, layout.PlotPaperSize.Y, 0.0));
+                bounds = hasBounds ? CombineExtents(bounds, plotBounds) : plotBounds;
+                hasBounds = true;
+            }
+
+            if (!hasBounds)
+            {
+                bounds = new Extents3d(
+                    new Point3d(0.0, 0.0, 0.0),
+                    new Point3d(PaperBackgroundFallbackWidth, PaperBackgroundFallbackHeight, 0.0));
+            }
+
+            return bounds;
+        }
+
+        private Extents3d GetPaperEntityExtentsExcludingViewports(BlockTableRecord paperSpace, Transaction tr, out int extentsEntityCount)
+        {
+            double minX = double.MaxValue, minY = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue;
+            extentsEntityCount = 0;
+
+            foreach (ObjectId id in paperSpace)
+            {
+                try
+                {
+                    var ent = tr.GetObject(id, OpenMode.ForRead, false) as Entity;
+                    if (ent == null || ent.IsErased || ent is Viewport)
+                        continue;
+
+                    if (string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var ext = ent.GeometricExtents;
+                    minX = Math.Min(minX, ext.MinPoint.X);
+                    minY = Math.Min(minY, ext.MinPoint.Y);
+                    maxX = Math.Max(maxX, ext.MaxPoint.X);
+                    maxY = Math.Max(maxY, ext.MaxPoint.Y);
+                    extentsEntityCount++;
+                }
+                catch
+                {
+                }
+            }
+
+            if (minX == double.MaxValue)
+                return new Extents3d(Point3d.Origin, Point3d.Origin);
+
+            return new Extents3d(new Point3d(minX, minY, 0.0), new Point3d(maxX, maxY, 0.0));
+        }
+
+        private int CreateModelSpaceSheetBackground(
+            Database db,
+            Transaction tr,
+            BlockTableRecord modelSpace,
+            Extents3d sourceBounds,
+            List<ObjectId> placedIds)
+        {
+            try
+            {
+                var backgroundIds = CreateWhiteBackgroundHatch(db, tr, modelSpace, sourceBounds);
+                foreach (ObjectId id in backgroundIds)
+                    placedIds.Add(id);
+
+                bool moved = MoveEntitiesToBottom(modelSpace, tr, backgroundIds);
+                AcadLogger.LogInfo($"MODELSPACE background: ids={backgroundIds.Count}, movedToBottom={moved}, bounds={FormatExtents(sourceBounds)}");
+                return backgroundIds.Count;
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"MODELSPACE background failed: {ex.Message}");
+                return 0;
+            }
+        }
+
+        private int ClonePaperEntitiesToModelSpace(
+            Database sourceDb,
+            Transaction sourceTrans,
+            Database outputDb,
+            Transaction outputTrans,
+            BlockTableRecord sourcePaperSpace,
+            BlockTableRecord outputModelSpace,
+            List<ObjectId> placedIds,
+            string label)
+        {
+            var sourceIds = new ObjectIdCollection();
+
+            foreach (ObjectId id in sourcePaperSpace)
+            {
+                try
+                {
+                    var ent = sourceTrans.GetObject(id, OpenMode.ForRead, false) as Entity;
+                    if (ent == null || ent.IsErased || ent is Viewport)
+                        continue;
+
+                    if (string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    sourceIds.Add(id);
+                }
+                catch
+                {
+                }
+            }
+
+            if (sourceIds.Count == 0)
+            {
+                AcadLogger.LogWarning($"MODELSPACE: '{label}' has no paper-space entities to clone");
+                return 0;
+            }
+
+            var idMap = new IdMapping();
+            sourceDb.WblockCloneObjects(sourceIds, outputModelSpace.ObjectId, idMap, DuplicateRecordCloning.Ignore, false);
+
+            int clonedCount = 0;
+            foreach (ObjectId sourceId in sourceIds)
+            {
+                try
+                {
+                    if (!idMap.Contains(sourceId))
+                        continue;
+
+                    var destId = idMap[sourceId].Value;
+                    if (destId.IsNull)
+                        continue;
+
+                    var ent = outputTrans.GetObject(destId, OpenMode.ForRead, false) as Entity;
+                    if (ent == null || ent.IsErased)
+                        continue;
+
+                    placedIds.Add(destId);
+                    clonedCount++;
+                }
+                catch
+                {
+                }
+            }
+
+            AcadLogger.LogInfo($"MODELSPACE: '{label}' cloned paper-space entities={clonedCount}/{sourceIds.Count}");
+            return clonedCount;
+        }
+
+        private int TransformEntities(Transaction tr, IEnumerable<ObjectId> ids, Matrix3d transform)
+        {
+            int movedCount = 0;
+
+            foreach (ObjectId id in ids)
+            {
+                try
+                {
+                    var ent = tr.GetObject(id, OpenMode.ForWrite, false) as Entity;
+                    if (ent == null || ent.IsErased)
+                        continue;
+
+                    ent.TransformBy(transform);
+                    movedCount++;
+                }
+                catch (System.Exception ex)
+                {
+                    AcadLogger.LogWarning($"MODELSPACE transform failed for id={id}: {ex.Message}");
+                }
+            }
+
+            return movedCount;
+        }
+
+        private int MoveModelSpaceBackgroundsToBottom(BlockTableRecord modelSpace, Transaction tr)
+        {
+            var backgroundIds = new ObjectIdCollection();
+
+            foreach (ObjectId id in modelSpace)
+            {
+                try
+                {
+                    var ent = tr.GetObject(id, OpenMode.ForRead, false) as Entity;
+                    if (ent != null &&
+                        !ent.IsErased &&
+                        string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        backgroundIds.Add(id);
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            if (backgroundIds.Count == 0)
+                return 0;
+
+            MoveEntitiesToBottom(modelSpace, tr, backgroundIds);
+            return backgroundIds.Count;
+        }
+
+        private int RegenerateModelSpace(Database db)
+        {
+            int entityCount = 0;
+            int extentsEntityCount = 0;
+            Extents3d extents = new Extents3d(Point3d.Origin, Point3d.Origin);
+            var previousWorkingDb = HostApplicationServices.WorkingDatabase;
+
+            try
+            {
+                AcadLogger.LogSection("Regenerating ModelSpace");
+                HostApplicationServices.WorkingDatabase = db;
+
+                try
+                {
+                    db.TileMode = true;
+                }
+                catch (System.Exception ex)
+                {
+                    AcadLogger.LogWarning($"MODELSPACE REGEN: failed to switch TileMode: {ex.Message}");
+                }
+
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var modelSpace = (BlockTableRecord)tr.GetObject(
+                        SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+
+                    foreach (ObjectId id in modelSpace)
+                    {
+                        try
+                        {
+                            var ent = tr.GetObject(id, OpenMode.ForRead, false) as Entity;
+                            if (ent != null && !ent.IsErased)
+                                entityCount++;
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    extents = GetExtents(modelSpace, tr, out extentsEntityCount);
+                    tr.Commit();
+                }
+
+                try
+                {
+                    db.UpdateExt(true);
+                }
+                catch (System.Exception ex)
+                {
+                    AcadLogger.LogWarning($"MODELSPACE REGEN: UpdateExt failed: {ex.Message}");
+                }
+
+                AcadLogger.LogInfo(
+                    $"MODELSPACE REGEN complete: entities={entityCount}, extentsEntities={extentsEntityCount}, extents={FormatExtents(extents)}");
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"RegenerateModelSpace failed: {ex.Message}");
+            }
+            finally
+            {
+                try
+                {
+                    HostApplicationServices.WorkingDatabase = previousWorkingDb;
+                }
+                catch
+                {
+                }
+            }
+
+            return entityCount;
         }
 
         private int RegenerateLayouts(Database db, string mode)
@@ -1259,7 +1609,8 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             Transaction outputTrans,
             BlockTableRecord destPaperSpace,
             IReadOnlyList<ViewportInfo> sourceViewports,
-            string layoutName)
+            string layoutName,
+            List<ObjectId> transformedDestIds = null)
         {
             if (sourceViewports == null || sourceViewports.Count == 0)
             {
@@ -1344,6 +1695,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
 
                             ent.TransformBy(transform);
                             transformedIds.Add(destId);
+                            transformedDestIds?.Add(destId);
                             transformedCount++;
                         }
                         catch (System.Exception ex)

@@ -189,6 +189,7 @@ _pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets
         public async Task<bool> MergeToModelSpaceAsync(
             List<string> dwgFiles,
             string outputPath,
+            List<string> layoutNames = null,
             IProgress<MergeProgressInfo> progress = null,
             CancellationToken cancellationToken = default)
         {
@@ -202,28 +203,34 @@ _pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets
             if (validFiles.Count == 0)
                 return false;
 
+            string configPath = null;
+            string scriptPath = null;
+            string seedPath = null;
+
             try
             {
                 EnsurePluginInstalled();
 
-                var config = CreateMergeConfig(validFiles, null, outputPath, "ModelSpace");
-                var configPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Model_{Guid.NewGuid()}.json");
-                var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Model_{Guid.NewGuid()}.scr");
+                var config = CreateMergeConfig(validFiles, layoutNames, outputPath, "ModelSpace");
+                configPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Model_{Guid.NewGuid()}.json");
+                scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Model_{Guid.NewGuid()}.scr");
+                seedPath = CreateConsoleSeedFile(validFiles[0]);
 
                 File.WriteAllText(configPath, config);
                 CreateMergeScript(scriptPath, configPath, outputPath);
 
-                var success = await RunAcCoreConsoleAsync(scriptPath, validFiles[0], outputPath, 300000, cancellationToken);
-
-                try { File.Delete(configPath); } catch { }
-                try { File.Delete(scriptPath); } catch { }
-
-                return success;
+                return await RunAcCoreConsoleAsync(scriptPath, seedPath, outputPath, 300000, cancellationToken);
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Merge] ModelSpace error: {ex.Message}");
                 return false;
+            }
+            finally
+            {
+                TryDeleteTempFile(configPath);
+                TryDeleteTempFile(scriptPath);
+                TryDeleteTempFile(seedPath);
             }
         }
 
@@ -265,6 +272,38 @@ private void CreateMergeScript(string scriptPath, string configPath, string outp
         sb.AppendLine("Y");
         File.WriteAllText(scriptPath, sb.ToString());
     }
+
+        private string CreateConsoleSeedFile(string sourcePath)
+        {
+            var seedPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_ModelSeed_{Guid.NewGuid()}.dwg");
+            CopyFileShared(sourcePath, seedPath);
+            Trace.WriteLine($"[Merge] ModelSpace seed DWG: {seedPath}");
+            return seedPath;
+        }
+
+        private void CopyFileShared(string sourcePath, string destPath)
+        {
+            using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var dest = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                source.CopyTo(dest);
+            }
+        }
+
+        private void TryDeleteTempFile(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return;
+
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch
+            {
+            }
+        }
 
         private async Task<bool> RunAcCoreConsoleAsync(string scriptPath, string inputPath, string outputPath, int timeoutMs, CancellationToken cancellationToken)
         {
