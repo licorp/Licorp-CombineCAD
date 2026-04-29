@@ -41,11 +41,11 @@ namespace Licorp_CombineCAD.Services
                     sheets.Add(sheetInfo);
                 }
 
-                Debug.WriteLine($"[CombineCAD] Collected {sheets.Count} sheets");
+                Trace.WriteLine($"[CombineCAD] Collected {sheets.Count} sheets");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[CombineCAD] Error collecting sheets: {ex.Message}");
+                Trace.WriteLine($"[CombineCAD] Error collecting sheets: {ex.Message}");
             }
 
             return sheets;
@@ -157,7 +157,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[CombineCAD] Viewport analysis error for {info.SheetNumber}: {ex.Message}");
+                Trace.WriteLine($"[CombineCAD] Viewport analysis error for {info.SheetNumber}: {ex.Message}");
                 info.ScaleText = "-";
             }
 

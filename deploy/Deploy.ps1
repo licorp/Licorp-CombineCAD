@@ -75,62 +75,65 @@ function Deploy-RevitAddin {
 }
 
 function Deploy-AutoCADPlugin {
-    Write-Host "[Deploy] Installing AutoCAD plugin..." -ForegroundColor Cyan
+Write-Host "[Deploy] Installing AutoCAD plugin..." -ForegroundColor Cyan
 
-    $dllSource = Join-Path $BinFolder "acad\Release\Licorp_MergeSheets.dll"
-    $bundleSource = Join-Path $ProjectRoot "src.acad\Licorp_MergeSheets"
+$bundleSource = Join-Path $ProjectRoot "src.acad\Licorp_MergeSheets"
+$bundleDest = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_MergeSheets.bundle"
+$contentsDest = Join-Path $bundleDest "Contents"
 
-    $bundleDest = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_MergeSheets.bundle"
-    $contentsDest = Join-Path $bundleDest "Contents"
+$dllNet48Source = Join-Path $BinFolder "acad\Release\net48\Licorp_MergeSheets.dll"
+$dllNet80Source = Join-Path $BinFolder "acad\Release\net8.0-windows\Licorp_MergeSheets.dll"
+$newtonsoftNet48Source = Join-Path $BinFolder "acad\Release\net48\Newtonsoft.Json.dll"
+$newtonsoftNet80Source = Join-Path $BinFolder "acad\Release\net8.0-windows\Newtonsoft.Json.dll"
 
-    # Clean up wrong folder if exists (in case old structure exists)
-    $wrongPath = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_MergeSheets"
-    if (Test-Path $wrongPath -PathType Container) {
-        $items = Get-ChildItem $wrongPath -Force
-        if ($items.Count -eq 0 -or ($items | Where-Object { $_.Name -eq "Contents" }).Count -eq 0) {
-            Write-Host " Cleaning up wrong folder: $wrongPath" -ForegroundColor Yellow
-            Remove-Item $wrongPath -Recurse -Force
-        }
-    }
+$contents2024Dest = Join-Path $contentsDest "2024"
+$contents2025Dest = Join-Path $contentsDest "2025"
 
-    if (!$Uninstall) {
-        if (!(Test-Path $bundleDest)) {
-            New-Item -ItemType Directory -Path $bundleDest -Force | Out-Null
-        }
+if (!$Uninstall) {
+if (!(Test-Path $bundleDest)) {
+New-Item -ItemType Directory -Path $bundleDest -Force | Out-Null
+}
 
-        if (!(Test-Path $contentsDest)) {
-            New-Item -ItemType Directory -Path $contentsDest -Force | Out-Null
-        }
+New-Item -ItemType Directory -Path $contentsDest -Force | Out-Null
+New-Item -ItemType Directory -Path $contents2024Dest -Force | Out-Null
+New-Item -ItemType Directory -Path $contents2025Dest -Force | Out-Null
 
-if (Test-Path $dllSource) {
-        Copy-Item $dllSource -Destination $contentsDest -Force
-        Write-Host " DLL: $dllSource" -ForegroundColor Gray
-    } else {
-        Write-Host " DLL not found: $dllSource (build acad project first)" -ForegroundColor Red
-        return
-    }
+if (Test-Path $dllNet48Source) {
+Copy-Item $dllNet48Source -Destination $contents2024Dest -Force
+Write-Host " DLL (net48): $dllNet48Source" -ForegroundColor Gray
+} else {
+Write-Host " DLL (net48) not found: $dllNet48Source" -ForegroundColor Red
+}
 
-    $newtonsoftSource = Join-Path $BinFolder "acad\Release\Newtonsoft.Json.dll"
-    if (Test-Path $newtonsoftSource) {
-        Copy-Item $newtonsoftSource -Destination $contentsDest -Force
-        Write-Host " Newtonsoft.Json.dll: $newtonsoftSource" -ForegroundColor Gray
-    } else {
-        Write-Host " Newtonsoft.Json.dll not found: $newtonsoftSource" -ForegroundColor Yellow
-    }
+if (Test-Path $dllNet80Source) {
+Copy-Item $dllNet80Source -Destination $contents2025Dest -Force
+Write-Host " DLL (net8.0): $dllNet80Source" -ForegroundColor Gray
+} else {
+Write-Host " DLL (net8.0) not found: $dllNet80Source" -ForegroundColor Red
+}
 
-        $packageContents = Join-Path $bundleSource "PackageContents.xml"
-        if (Test-Path $packageContents) {
-            Copy-Item $packageContents -Destination $bundleDest -Force
-            Write-Host " PackageContents.xml: $packageContents" -ForegroundColor Gray
-        }
+if (Test-Path $newtonsoftNet48Source) {
+Copy-Item $newtonsoftNet48Source -Destination $contents2024Dest -Force
+}
+if (Test-Path $newtonsoftNet80Source) {
+Copy-Item $newtonsoftNet80Source -Destination $contents2025Dest -Force
+}
 
-        Write-Host " Installed: $bundleDest" -ForegroundColor Green
-    } else {
-        if (Test-Path $bundleDest) {
-            Remove-Item $bundleDest -Recurse -Force
-            Write-Host " Uninstalled: $bundleDest" -ForegroundColor Yellow
-        }
-    }
+$packageContents = Join-Path $bundleSource "PackageContents.xml"
+if (Test-Path $packageContents) {
+Copy-Item $packageContents -Destination $bundleDest -Force
+Write-Host " PackageContents.xml: $packageContents" -ForegroundColor Gray
+}
+
+Write-Host " Installed: $bundleDest" -ForegroundColor Green
+Write-Host "   -> Contents/2024/ (AutoCAD 2024, .NET Framework 4.8)" -ForegroundColor Gray
+Write-Host "   -> Contents/2025/ (AutoCAD 2025+, .NET 8.0)" -ForegroundColor Gray
+} else {
+if (Test-Path $bundleDest) {
+Remove-Item $bundleDest -Recurse -Force
+Write-Host " Uninstalled: $bundleDest" -ForegroundColor Yellow
+}
+}
 }
 
 # Main

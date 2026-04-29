@@ -22,15 +22,25 @@ public class DwgMergeService
     private string _verticalAlign = "Top";
     private string _dwgVersion = "Current";
 
-    public DwgMergeService(string accoreconsolePath = null)
-    {
-        _accoreconsolePath = accoreconsolePath ?? AutoCadLocatorService.FindAcCoreConsole();
+public DwgMergeService(string accoreconsolePath = null)
+{
+_accoreconsolePath = accoreconsolePath ?? AutoCadLocatorService.FindAcCoreConsole();
 
 var pluginDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                @"Autodesk\ApplicationPlugins\Licorp_MergeSheets.bundle");
-            _pluginPath = Path.Combine(pluginDir, "Contents", "Licorp_MergeSheets.dll");
-    }
+Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+@"Autodesk\ApplicationPlugins\Licorp_MergeSheets.bundle");
+
+string subFolder = "2024";
+if (!string.IsNullOrEmpty(_accoreconsolePath))
+{
+var accoreDir = Path.GetDirectoryName(_accoreconsolePath).ToLowerInvariant();
+if (accoreDir.Contains("2025") || accoreDir.Contains("2026") || accoreDir.Contains("2027"))
+{
+subFolder = "2025";
+}
+}
+_pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets.dll");
+}
 
     public bool IsAvailable => !string.IsNullOrEmpty(_accoreconsolePath);
 
@@ -65,12 +75,12 @@ var pluginDir = Path.Combine(
                 if (File.Exists(sourceDll))
                 {
                     File.Copy(sourceDll, _pluginPath, true);
-                    Debug.WriteLine($"[Merge] Plugin installed to: {_pluginPath}");
+                    Trace.WriteLine($"[Merge] Plugin installed to: {_pluginPath}");
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Merge] Plugin install failed: {ex.Message}");
+                Trace.WriteLine($"[Merge] Plugin install failed: {ex.Message}");
             }
         }
 
@@ -89,14 +99,14 @@ var pluginDir = Path.Combine(
 
             if (!IsAvailable)
             {
-                Debug.WriteLine("[Merge] AcCoreConsole not available");
+                Trace.WriteLine("[Merge] AcCoreConsole not available");
                 return false;
             }
 
             var validFiles = dwgFiles.Where(f => File.Exists(f)).ToList();
             if (validFiles.Count == 0)
             {
-                Debug.WriteLine("[Merge] No valid source files");
+                Trace.WriteLine("[Merge] No valid source files");
                 return false;
             }
 
@@ -128,7 +138,7 @@ var pluginDir = Path.Combine(
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Merge] Error: {ex.Message}");
+                Trace.WriteLine($"[Merge] Error: {ex.Message}");
                 return false;
             }
         }
@@ -171,7 +181,7 @@ var pluginDir = Path.Combine(
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Merge] SingleLayout error: {ex.Message}");
+                Trace.WriteLine($"[Merge] SingleLayout error: {ex.Message}");
                 return false;
             }
         }
@@ -212,7 +222,7 @@ var pluginDir = Path.Combine(
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Merge] ModelSpace error: {ex.Message}");
+                Trace.WriteLine($"[Merge] ModelSpace error: {ex.Message}");
                 return false;
             }
         }
@@ -242,29 +252,14 @@ private void CreateMergeScript(string scriptPath, string configPath, string outp
     {
         var sb = new StringBuilder();
 
-        var bundleDir = Path.GetDirectoryName(Path.GetDirectoryName(_pluginPath));
-        bool bundleExists = File.Exists(Path.Combine(bundleDir, "PackageContents.xml"));
-
         var silentConfigPath = Path.Combine(Path.GetTempPath(), "Licorp_MergeSheets_Config.json");
         File.Copy(configPath, silentConfigPath, true);
 
-        if (!bundleExists)
-        {
-            sb.AppendLine("_SECURELOAD");
-            sb.AppendLine("0");
-            sb.AppendLine("NETLOAD");
-            sb.AppendLine($"\"{_pluginPath}\"");
-            sb.AppendLine("_LICORP_MERGESHEETS");
-            sb.AppendLine($"\"{configPath}\"");
-        }
-        else
-        {
-            sb.AppendLine("_SECURELOAD");
-            sb.AppendLine("0");
-            sb.AppendLine("NETLOAD");
-            sb.AppendLine($"\"{_pluginPath}\"");
-            sb.AppendLine("_LICORP_MERGESHEETS");
-        }
+        sb.AppendLine("_SECURELOAD");
+        sb.AppendLine("0");
+        sb.AppendLine("NETLOAD");
+        sb.AppendLine($"\"{_pluginPath}\"");
+        sb.AppendLine("_LICORP_MERGESHEETS");
 
         sb.AppendLine("QUIT");
         sb.AppendLine("Y");
@@ -280,17 +275,17 @@ if (!string.IsNullOrEmpty(_accoreconsolePath))
                 return await RunAcCoreConsoleInternalAsync(scriptPath, inputPath, outputPath, timeoutMs, cancellationToken);
             }
 
-            Debug.WriteLine("[Merge] AcCoreConsole not available");
+            Trace.WriteLine("[Merge] AcCoreConsole not available");
             return false;
             }
             catch (OperationCanceledException)
             {
-                Debug.WriteLine("[Merge] Cancelled");
+                Trace.WriteLine("[Merge] Cancelled");
                 return false;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Merge] Error: {ex.Message}");
+                Trace.WriteLine($"[Merge] Error: {ex.Message}");
                 return false;
             }
         }
@@ -301,7 +296,7 @@ if (!string.IsNullOrEmpty(_accoreconsolePath))
             {
                 if (!File.Exists(inputPath))
                 {
-                    Debug.WriteLine($"[Merge] Input file not found: {inputPath}");
+                    Trace.WriteLine($"[Merge] Input file not found: {inputPath}");
                     return false;
                 }
 
@@ -334,22 +329,22 @@ if (!string.IsNullOrEmpty(_accoreconsolePath))
                     string output = await outputTask;
                     string errors = await errorTask;
 
-                    Debug.WriteLine($"[Merge] AcCoreConsole exit code: {process.ExitCode}");
+                    Trace.WriteLine($"[Merge] AcCoreConsole exit code: {process.ExitCode}");
                     if (!string.IsNullOrEmpty(errors))
-                        Debug.WriteLine($"[Merge] Errors: {errors}");
+                        Trace.WriteLine($"[Merge] Errors: {errors}");
 
                     if (process.ExitCode == 0 && File.Exists(outputPath))
                         return true;
 
                     if (!File.Exists(outputPath))
-                        Debug.WriteLine($"[Merge] Output file not found: {outputPath}");
+                        Trace.WriteLine($"[Merge] Output file not found: {outputPath}");
 
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Merge] Console error: {ex.Message}");
+                Trace.WriteLine($"[Merge] Console error: {ex.Message}");
                 return false;
             }
 }

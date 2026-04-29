@@ -35,13 +35,13 @@ namespace Licorp_CombineCAD.Services
                 {
                     var json = File.ReadAllText(_configFile);
                     _lastProfile = JsonConvert.DeserializeObject<ExportProfile>(json);
-                    System.Diagnostics.Debug.WriteLine($"[Profile] Loaded: {_configFile}");
+                    System.Diagnostics.Trace.WriteLine($"[Profile] Loaded: {_configFile}");
                     return _lastProfile;
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Profile] Load error: {ex.Message}");
+                System.Diagnostics.Trace.WriteLine($"[Profile] Load error: {ex.Message}");
             }
 
             _lastProfile = new ExportProfile();
@@ -55,11 +55,11 @@ namespace Licorp_CombineCAD.Services
                 var json = JsonConvert.SerializeObject(profile, Formatting.Indented);
                 File.WriteAllText(_configFile, json);
                 _lastProfile = profile;
-                System.Diagnostics.Debug.WriteLine($"[Profile] Saved: {_configFile}");
+                System.Diagnostics.Trace.WriteLine($"[Profile] Saved: {_configFile}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Profile] Save error: {ex.Message}");
+                System.Diagnostics.Trace.WriteLine($"[Profile] Save error: {ex.Message}");
             }
         }
 

@@ -32,7 +32,7 @@ namespace Licorp_CombineCAD.Services
 
                 if (dwgSettings == null)
                 {
-                    Debug.WriteLine($"[LayerMapping] Setup '{setupName}' not found");
+                    Trace.WriteLine($"[LayerMapping] Setup '{setupName}' not found");
                     return false;
                 }
 
@@ -66,7 +66,7 @@ namespace Licorp_CombineCAD.Services
                             }
                             catch (Exception ex)
                             {
-                                Debug.WriteLine($"[LayerMapping] Error reading entry {i}: {ex.Message}");
+                                Trace.WriteLine($"[LayerMapping] Error reading entry {i}: {ex.Message}");
                             }
                         }
                     }
@@ -91,15 +91,15 @@ namespace Licorp_CombineCAD.Services
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"[LayerMapping] Enumerator error: {ex.Message}");
+                            Trace.WriteLine($"[LayerMapping] Enumerator error: {ex.Message}");
                         }
                     }
 
-                    Debug.WriteLine($"[LayerMapping] Exported {entries.Count - 1} entries");
+                    Trace.WriteLine($"[LayerMapping] Exported {entries.Count - 1} entries");
                 }
                 else
                 {
-                    Debug.WriteLine("[LayerMapping] ExportLayerTable not available, exporting header only");
+                    Trace.WriteLine("[LayerMapping] ExportLayerTable not available, exporting header only");
                 }
 
                 File.WriteAllLines(filePath, entries);
@@ -107,7 +107,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[LayerMapping] Export error: {ex.Message}");
+                Trace.WriteLine($"[LayerMapping] Export error: {ex.Message}");
                 return false;
             }
         }
@@ -126,7 +126,7 @@ namespace Licorp_CombineCAD.Services
 
                 if (dwgSettings == null)
                 {
-                    Debug.WriteLine($"[LayerMapping] Setup '{setupName}' not found");
+                    Trace.WriteLine($"[LayerMapping] Setup '{setupName}' not found");
                     return false;
                 }
 
@@ -170,7 +170,7 @@ namespace Licorp_CombineCAD.Services
                                 }
                                 catch (Exception ex)
                                 {
-                                    Debug.WriteLine($"[LayerMapping] Error adding entry: {ex.Message}");
+                                    Trace.WriteLine($"[LayerMapping] Error adding entry: {ex.Message}");
                                 }
                             }
                         }
@@ -182,11 +182,11 @@ namespace Licorp_CombineCAD.Services
                         setLayerTableMethod.Invoke(options, new[] { layerTable });
                     }
 
-                    Debug.WriteLine($"[LayerMapping] Imported {importedEntries.Count} entries");
+                    Trace.WriteLine($"[LayerMapping] Imported {importedEntries.Count} entries");
                 }
                 else
                 {
-                    Debug.WriteLine("[LayerMapping] ExportLayerTable not available for import");
+                    Trace.WriteLine("[LayerMapping] ExportLayerTable not available for import");
                     return false;
                 }
 
@@ -194,7 +194,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[LayerMapping] Import error: {ex.Message}");
+                Trace.WriteLine($"[LayerMapping] Import error: {ex.Message}");
                 return false;
             }
         }
@@ -255,7 +255,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[LayerMapping] GetExportLayerTable error: {ex.Message}");
+                Trace.WriteLine($"[LayerMapping] GetExportLayerTable error: {ex.Message}");
             }
             return null;
         }
@@ -277,7 +277,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[LayerMapping] Extract error: {ex.Message}");
+                Trace.WriteLine($"[LayerMapping] Extract error: {ex.Message}");
             }
             return null;
         }
@@ -315,7 +315,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[LayerMapping] Create entry error: {ex.Message}");
+                Trace.WriteLine($"[LayerMapping] Create entry error: {ex.Message}");
                 return null;
             }
         }

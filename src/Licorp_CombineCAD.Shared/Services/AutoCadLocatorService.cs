@@ -51,7 +51,7 @@ namespace Licorp_CombineCAD.Services
                 var specificPath = $@"C:\Program Files\Autodesk\AutoCAD {preferredVersion}\accoreconsole.exe";
                 if (File.Exists(specificPath))
                 {
-                    Debug.WriteLine($"[CombineCAD] Found AcCoreConsole {preferredVersion}: {specificPath}");
+                    Trace.WriteLine($"[CombineCAD] Found AcCoreConsole {preferredVersion}: {specificPath}");
                     return specificPath;
                 }
             }
@@ -72,7 +72,7 @@ namespace Licorp_CombineCAD.Services
             {
                 if (File.Exists(path))
                 {
-                    Debug.WriteLine($"[CombineCAD] Found AcCoreConsole: {path}");
+                    Trace.WriteLine($"[CombineCAD] Found AcCoreConsole: {path}");
                     return path;
                 }
             }
@@ -81,11 +81,11 @@ namespace Licorp_CombineCAD.Services
             string regPath = FindFromRegistry("accoreconsole.exe");
             if (!string.IsNullOrEmpty(regPath))
             {
-                Debug.WriteLine($"[CombineCAD] Found AcCoreConsole via registry: {regPath}");
+                Trace.WriteLine($"[CombineCAD] Found AcCoreConsole via registry: {regPath}");
                 return regPath;
             }
 
-            Debug.WriteLine("[CombineCAD] AcCoreConsole not found on this system");
+            Trace.WriteLine("[CombineCAD] AcCoreConsole not found on this system");
             return null;
         }
 
@@ -209,7 +209,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[CombineCAD] Registry search failed: {ex.Message}");
+                Trace.WriteLine($"[CombineCAD] Registry search failed: {ex.Message}");
             }
 
             return null;
@@ -227,15 +227,34 @@ namespace Licorp_CombineCAD.Services
                     foreach (var subKeyName in key.GetSubKeyNames())
                     {
                         var version = subKeyName.Replace("R", "").Split('.').FirstOrDefault();
-                        if (!string.IsNullOrEmpty(version) && version.Length == 4)
+                        if (!string.IsNullOrEmpty(version) && version.Length >= 2)
                         {
-                            versions.Add(version);
+                            var productYear = GetProductYearFromRelease(version);
+                            if (!string.IsNullOrEmpty(productYear))
+                                versions.Add(productYear);
                         }
                     }
                 }
             }
             catch { }
             return versions;
+        }
+
+        private static string GetProductYearFromRelease(string releaseVersion)
+        {
+            switch (releaseVersion)
+            {
+                case "24.0": return "2021";
+                case "24.1": return "2022";
+                case "24.2": return "2023";
+                case "24.3": return "2024";
+                case "25.0": return "2025";
+                case "25.1": return "2026";
+                case "23.1": return "2020";
+                case "23.0": return "2019";
+                case "22.0": return "2018";
+                default: return null;
+            }
         }
     }
 }

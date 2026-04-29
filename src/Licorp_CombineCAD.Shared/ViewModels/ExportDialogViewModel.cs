@@ -109,13 +109,24 @@ namespace Licorp_CombineCAD.ViewModels
         public ExportMode ExportMode
         {
             get => _exportMode;
-            set { _exportMode = value; OnPropertyChanged(); ValidateExportMode(); }
+            set
+            {
+                _exportMode = value;
+                EnforceSelfContainedSheetDwgExport();
+                OnPropertyChanged();
+                ValidateExportMode();
+            }
         }
 
         public bool AutoBindXRef
         {
             get => _autoBindXRef;
-            set { _autoBindXRef = value; OnPropertyChanged(); }
+            set
+            {
+                _autoBindXRef = value;
+                EnforceSelfContainedSheetDwgExport();
+                OnPropertyChanged();
+            }
         }
 
         public bool SmartViewScale
@@ -317,23 +328,23 @@ namespace Licorp_CombineCAD.ViewModels
             if (IsExporting || SelectedCount == 0 || string.IsNullOrEmpty(OutputFolder))
                 return false;
 
-if (!IsAutoCADAvailable)
-            return false;
-
-        return true;
-    }
-
-    private void ValidateExportMode()
-    {
-        if (!IsAutoCADAvailable)
-        {
-            StatusMessage = "AutoCAD not detected. Merge features require AutoCAD.";
+            // Export is always available; merge requires AutoCAD
+            return true;
         }
-        else
+
+        private void ValidateExportMode()
         {
-            StatusMessage = "";
+            EnforceSelfContainedSheetDwgExport();
+
+            if (!IsAutoCADAvailable)
+            {
+                StatusMessage = "AutoCAD not detected. Only individual export will be performed.";
+            }
+            else
+            {
+                StatusMessage = "";
+            }
         }
-    }
 
         private void CheckAutoCADAvailability()
         {
@@ -415,9 +426,9 @@ if (!IsAutoCADAvailable)
                         cts.Token);
                 });
 
-                var exportedFiles = exportResult.ExportedFiles;
+                var exportedFiles = exportResult?.ExportedFiles ?? new List<string>();
 
-                if (_cancellationTokenSource.Token.IsCancellationRequested)
+                if (cts.Token.IsCancellationRequested)
                 {
                     StatusMessage = "Export cancelled.";
                     _progressVm.StopTimer();
@@ -425,7 +436,7 @@ if (!IsAutoCADAvailable)
                     return;
                 }
 
-                if (exportResult.HasWarnings)
+                if (exportResult != null && exportResult.HasWarnings)
                 {
                     var warningMsg = exportResult.Summary;
                     if (exportResult.FailedSheets.Count > 0)
@@ -438,85 +449,96 @@ if (!IsAutoCADAvailable)
                     }));
                 }
 
-        string fileToOpen = null;
+                string fileToOpen = null;
 
-        if (exportedFiles.Count > 0)
-        {
-            _progressVm.UpdatePhase("Merging");
+                if (exportedFiles.Count > 0)
+                {
+                    // Only merge if AutoCAD is available
+                    if (IsAutoCADAvailable)
+                    {
+                        _progressVm.UpdatePhase("Merging");
 
-var accorePath = AutoCadLocatorService.FindAcCoreConsole(SelectedAutoCADVersion);
-                var mergeService = new DwgMergeService(accorePath);
-                mergeService.SetVerticalAlignment(settings.VerticalAlign.ToString());
-                mergeService.SetDwgVersion(settings.DwgVersion ?? "Current");
-                var layoutNames = selectedSheets.Select(s => $"{s.SheetNumber} - {s.SheetName}").ToList();
-            var outputPath = GetUniqueOutputPath();
+                        var accorePath = AutoCadLocatorService.FindAcCoreConsole(SelectedAutoCADVersion);
+                        var mergeService = new DwgMergeService(accorePath);
+                        mergeService.SetVerticalAlignment(settings.VerticalAlign.ToString());
+                        mergeService.SetDwgVersion(settings.DwgVersion ?? "Current");
+                        var layoutNames = selectedSheets.Select(s => $"{s.SheetNumber} - {s.SheetName}").ToList();
+                        var outputPath = GetUniqueOutputPath();
 
-            bool mergeSuccess = false;
-            switch (ExportMode)
-            {
-                case ExportMode.MultiLayout:
-                    mergeSuccess = await mergeService.MergeToMultiLayoutAsync(exportedFiles, outputPath, layoutNames, null, _cancellationTokenSource.Token);
-                    break;
-                case ExportMode.SingleLayout:
-                    mergeSuccess = await mergeService.MergeToSingleLayoutAsync(exportedFiles, outputPath, "Combined", null, _cancellationTokenSource.Token);
-                    break;
-                case ExportMode.ModelSpace:
-                    mergeSuccess = await mergeService.MergeToModelSpaceAsync(exportedFiles, outputPath, null, _cancellationTokenSource.Token);
-                    break;
+                        bool mergeSuccess = false;
+                        switch (ExportMode)
+                        {
+                            case ExportMode.MultiLayout:
+                                mergeSuccess = await mergeService.MergeToMultiLayoutAsync(exportedFiles, outputPath, layoutNames, null, cts.Token);
+                                break;
+                            case ExportMode.SingleLayout:
+                                mergeSuccess = await mergeService.MergeToSingleLayoutAsync(exportedFiles, outputPath, "Combined", null, cts.Token);
+                                break;
+                            case ExportMode.ModelSpace:
+                                mergeSuccess = await mergeService.MergeToModelSpaceAsync(exportedFiles, outputPath, null, cts.Token);
+                                break;
+                        }
+
+                        if (mergeSuccess)
+                        {
+                            StatusMessage = $"Merged {exportedFiles.Count} files to {Path.GetFileName(outputPath)}";
+                            if (OpenAfterExport)
+                                fileToOpen = outputPath;
+                        }
+                        else
+                        {
+                            StatusMessage = "Merge failed.";
+                            if (OpenAfterExport && exportedFiles.Count > 0)
+                                fileToOpen = exportedFiles.First();
+                        }
+                    }
+                    else
+                    {
+                        StatusMessage = $"Exported {exportedFiles.Count} individual DWG files. AutoCAD not available for merge.";
+                        if (OpenAfterExport && exportedFiles.Count > 0)
+                            fileToOpen = exportedFiles.First();
+                    }
+                }
+
+                _progressVm.StopTimer();
+                _progressVm.Completed = true;
+                SaveSettings();
+
+                await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { _progressDialog.Close(); } catch (Exception closeEx) { Trace.WriteLine($"[ExportDialog] Close dialog error: {closeEx.Message}"); }
+                }));
+                await Task.Delay(500);
+
+                if (fileToOpen != null)
+                    await OpenWithAutoCADAsync(fileToOpen);
             }
-
-if (mergeSuccess)
-            {
-                StatusMessage = $"Merged {exportedFiles.Count} files to {Path.GetFileName(outputPath)}";
-
-                if (OpenAfterExport)
-                    fileToOpen = outputPath;
-            }
-else
-        {
-            StatusMessage = "Merge failed.";
-            if (OpenAfterExport && exportedFiles.Count > 0)
-                fileToOpen = exportedFiles.First();
-        }
-    }
-
-    _progressVm.StopTimer();
-    _progressVm.Completed = true;
-    SaveSettings();
-
-    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-    {
-        try { _progressDialog.Close(); } catch { }
-    }));
-    await Task.Delay(500);
-
-    if (fileToOpen != null)
-        await OpenWithAutoCADAsync(fileToOpen);
-}
-catch (OperationCanceledException)
+            catch (OperationCanceledException)
             {
                 StatusMessage = "Export cancelled.";
-                Debug.WriteLine("[Export] Cancelled by user");
+                Trace.WriteLine("[Export] Cancelled by user");
             }
             catch (Exception ex)
             {
                 StatusMessage = $"Error: {ex.Message}";
-                Debug.WriteLine($"[Export] Error: {ex}");
+                Trace.WriteLine($"[Export] Error: {ex}");
             }
-        finally
-        {
-            IsExporting = false;
-            if (_progressVm != null && !_progressVm.Completed)
+            finally
             {
-                _progressVm.StopTimer();
-                _progressVm.Completed = true;
-                await Task.Delay(500);
-                Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                IsExporting = false;
+                if (_progressVm != null && !_progressVm.Completed)
                 {
-                    try { _progressDialog.Close(); } catch { }
-                }));
+                    _progressVm.StopTimer();
+                    _progressVm.Completed = true;
+                    await Task.Delay(500);
+                    await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try { _progressDialog.Close(); } catch (Exception closeEx) { Trace.WriteLine($"[ExportDialog] Close dialog error: {closeEx.Message}"); }
+                    }));
+                }
+                _cancellationTokenSource?.Dispose();
+                _cancellationTokenSource = null;
             }
-        }
         }
 
         private string GetUniqueOutputPath()
@@ -557,7 +579,7 @@ catch (OperationCanceledException)
                 DwgExportSetupName = SelectedSetup,
                 ExportMode = ExportMode,
                 DwgVersion = SelectedDwgVersion,
-                AutoBindXRef = AutoBindXRef,
+                AutoBindXRef = true,
                 SmartViewScale = SmartViewScale,
                 OpenAfterExport = OpenAfterExport,
                 ProgressAlwaysOnTop = ProgressAlwaysOnTop,
@@ -566,6 +588,16 @@ catch (OperationCanceledException)
                 PreserveCoincidentLines = PreserveCoincidentLines,
                 CreateSubfolders = CreateSubfolders
             };
+        }
+
+        private void EnforceSelfContainedSheetDwgExport()
+        {
+            // The AutoCAD merge engine expects each exported sheet DWG to be self-contained.
+            if (!_autoBindXRef)
+            {
+                _autoBindXRef = true;
+                OnPropertyChanged(nameof(AutoBindXRef));
+            }
         }
 
 private void SaveSettings()
@@ -609,7 +641,7 @@ AutoBindXRef = _profile.AutoBindXRef;
     {
         if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
         {
-            Debug.WriteLine($"[Export] File not found for open: {filePath}");
+            Trace.WriteLine($"[Export] File not found for open: {filePath}");
             MessageBox.Show($"File not found:\n{filePath}", "Open Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -627,7 +659,7 @@ AutoBindXRef = _profile.AutoBindXRef;
                     Arguments = $"\"{filePath}\"",
                     UseShellExecute = true
                 });
-                Debug.WriteLine($"[Export] Opened with AutoCAD: {acadPath}");
+                Trace.WriteLine($"[Export] Opened with AutoCAD: {acadPath}");
                 return;
             }
 
@@ -644,7 +676,7 @@ AutoBindXRef = _profile.AutoBindXRef;
                         Arguments = $"\"{filePath}\"",
                         UseShellExecute = true
                     });
-                    Debug.WriteLine($"[Export] Opened with AutoCAD: {acadExe}");
+                    Trace.WriteLine($"[Export] Opened with AutoCAD: {acadExe}");
                     return;
                 }
             }
@@ -652,11 +684,11 @@ AutoBindXRef = _profile.AutoBindXRef;
             try
             {
                 Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true });
-                Debug.WriteLine($"[Export] Opened with default handler");
+                Trace.WriteLine($"[Export] Opened with default handler");
             }
             catch (Exception openEx)
             {
-                Debug.WriteLine($"[Export] No handler for .dwg: {openEx.Message}");
+                Trace.WriteLine($"[Export] No handler for .dwg: {openEx.Message}");
                 MessageBox.Show(
                     $"Cannot open DWG file. No AutoCAD installation found.\n\nFile: {filePath}",
                     "Open Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -664,7 +696,7 @@ AutoBindXRef = _profile.AutoBindXRef;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Export] Failed to open file: {ex.Message}");
+            Trace.WriteLine($"[Export] Failed to open file: {ex.Message}");
             MessageBox.Show(
                 $"Failed to open DWG file:\n{ex.Message}\n\nFile: {filePath}",
                 "Open Failed", MessageBoxButton.OK, MessageBoxImage.Warning);

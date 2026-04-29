@@ -21,8 +21,8 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[ExportEventHandler] Error: {ex.Message}");
                 Trace.WriteLine($"[ExportEventHandler] Error: {ex.Message}");
+                Trace.WriteLine($"[ExportEventHandler] Stack: {ex.StackTrace}");
             }
         }
 
@@ -47,7 +47,6 @@ namespace Licorp_CombineCAD.Services
         {
             _handler.ExecuteAction = action;
             _externalEvent.Raise();
-            Debug.WriteLine("[RevitThread] Raised external event");
             Trace.WriteLine("[RevitThread] Raised external event");
         }
 
@@ -67,7 +66,6 @@ namespace Licorp_CombineCAD.Services
                 }
             };
             _externalEvent.Raise();
-            Debug.WriteLine("[RevitThread] Raised external event (async with result)");
             Trace.WriteLine("[RevitThread] Raised external event (async with result)");
             return tcs.Task;
         }

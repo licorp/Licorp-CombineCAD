@@ -60,7 +60,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[SmartScale] Error getting viewports: {ex.Message}");
+                Debug.WriteLine($"[SmartScale] Error getting viewports: {ex.Message}");
             }
 
             return viewports;
@@ -93,7 +93,7 @@ namespace Licorp_CombineCAD.Services
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[SmartScale] Error finding title block: {ex.Message}");
+                Debug.WriteLine($"[SmartScale] Error finding title block: {ex.Message}");
             }
 
             return null;
@@ -112,7 +112,7 @@ namespace Licorp_CombineCAD.Services
                 var titleBlockId = FindTitleBlock(sheet);
                 if (titleBlockId == null)
                 {
-                    Trace.WriteLine($"[SmartScale] Title block not found for sheet {sheet.SheetNumber}");
+                    Debug.WriteLine($"[SmartScale] Title block not found for sheet {sheet.SheetNumber}");
                     return false;
                 }
 
@@ -127,14 +127,14 @@ namespace Licorp_CombineCAD.Services
                 {
                     _originalValues[sheet.Id] = scaleParam.AsString();
                     scaleParam.Set(scaleText);
-                    Trace.WriteLine($"[SmartScale] Set {scaleText} on title block for sheet {sheet.SheetNumber}");
+                    Debug.WriteLine($"[SmartScale] Set {scaleText} on title block for sheet {sheet.SheetNumber}");
                 }
 
                 return true;
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[SmartScale] Error applying scale: {ex.Message}");
+                Debug.WriteLine($"[SmartScale] Error applying scale: {ex.Message}");
                 return false;
             }
         }
@@ -159,14 +159,14 @@ namespace Licorp_CombineCAD.Services
                 if (scaleParam != null && !scaleParam.IsReadOnly)
                 {
                     scaleParam.Set(originalValue);
-                    Trace.WriteLine($"[SmartScale] Restored original scale for sheet {sheet.SheetNumber}");
+                    Debug.WriteLine($"[SmartScale] Restored original scale for sheet {sheet.SheetNumber}");
                 }
 
                 _originalValues.Remove(sheet.Id);
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[SmartScale] Error restoring scale: {ex.Message}");
+                Debug.WriteLine($"[SmartScale] Error restoring scale: {ex.Message}");
             }
         }
     }

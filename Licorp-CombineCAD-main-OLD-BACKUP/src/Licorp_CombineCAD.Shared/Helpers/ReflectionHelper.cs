@@ -24,18 +24,18 @@ namespace Licorp_CombineCAD.Helpers
                 if (property != null && property.CanWrite)
                 {
                     property.SetValue(target, value);
-                    Trace.WriteLine($"[CombineCAD] Set {propertyName} = {value}");
+                    Debug.WriteLine($"[CombineCAD] Set {propertyName} = {value}");
                     return true;
                 }
                 else
                 {
-                    Trace.WriteLine($"[CombineCAD] Property not found or read-only: {propertyName}");
+                    Debug.WriteLine($"[CombineCAD] Property not found or read-only: {propertyName}");
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CombineCAD] Failed to set {propertyName}: {ex.Message}");
+                Debug.WriteLine($"[CombineCAD] Failed to set {propertyName}: {ex.Message}");
                 return false;
             }
         }
@@ -58,7 +58,7 @@ namespace Licorp_CombineCAD.Helpers
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CombineCAD] Enum lookup failed: {enumTypeName}.{valueName}: {ex.Message}");
+                Debug.WriteLine($"[CombineCAD] Enum lookup failed: {enumTypeName}.{valueName}: {ex.Message}");
             }
 
             return null;

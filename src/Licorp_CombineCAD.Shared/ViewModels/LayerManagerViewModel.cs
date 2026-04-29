@@ -87,7 +87,7 @@ namespace Licorp_CombineCAD.ViewModels
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[LayerManager] Error loading setups: {ex.Message}");
+                Trace.WriteLine($"[LayerManager] Error loading setups: {ex.Message}");
             }
         }
 

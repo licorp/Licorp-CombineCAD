@@ -1,54 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ApplicationPackage SchemaVersion="1.0"
-    Name="Licorp MergeSheets"
-    Description="AutoCAD plugin for merging multiple DWG files with multiple layouts"
-    Author="LICORP"
-    AppVersion="1.0.0.0"
-    ProductCode="{E5F6A7B8-C9D0-4E1F-9A2B-3C4D5E6F7A8B}"
-    ProductType="Application">
+Name="Licorp MergeSheets"
+Description="AutoCAD plugin for merging multiple DWG files with multiple layouts"
+Author="LICORP"
+AppVersion="1.0.0.0"
+ProductCode="{E5F6A7B8-C9D0-4E1F-9A2B-3C4D5E6F7A8B}"
+ProductType="Application">
 
-    <Company Name="LICORP" />
+<Company Name="LICORP" />
 
-    <!-- AutoCAD 2024 (R24.0 - R24.3) -->
-    <Components>
-        <ComponentEntry AppName="Licorp MergeSheets"
-            Version="1.0.0"
-            ModuleName="./Contents/Licorp_MergeSheets.dll"
-            AppDescription="Merge DWG files into multi-layout output"
-            LoadOnAutoCADStartup="True">
-            <Commands>
-                <Command Local="LICORP_MERGESHEETS" Global="LICORP_MERGESHEETS" />
-            </Commands>
-            <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3" />
-        </ComponentEntry>
-    </Components>
+<!-- AutoCAD 2024 (R24.0 - R24.3) - .NET Framework 4.8 -->
+<Components>
+<ComponentEntry AppName="Licorp MergeSheets"
+Version="1.0.0"
+ModuleName="./Contents/2024/Licorp_MergeSheets.dll"
+AppDescription="Merge DWG files into multi-layout output"
+LoadOnAutoCADStartup="True">
+<Commands>
+<Command Local="LICORP_MERGESHEETS" Global="LICORP_MERGESHEETS" />
+</Commands>
+<RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3" />
+</ComponentEntry>
+</Components>
 
-    <!-- AutoCAD 2025 (R25.x) -->
-    <Components>
-        <ComponentEntry AppName="Licorp MergeSheets"
-            Version="1.0.0"
-            ModuleName="./Contents/Licorp_MergeSheets.dll"
-            AppDescription="Merge DWG files into multi-layout output"
-            LoadOnAutoCADStartup="True">
-            <Commands>
-                <Command Local="LICORP_MERGESHEETS" Global="LICORP_MERGESHEETS" />
-            </Commands>
-            <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.3" />
-        </ComponentEntry>
-    </Components>
+<!-- AutoCAD 2025 (R25.x) - .NET 8.0 -->
+<Components>
+<ComponentEntry AppName="Licorp MergeSheets"
+Version="1.0.0"
+ModuleName="./Contents/2025/Licorp_MergeSheets.dll"
+AppDescription="Merge DWG files into multi-layout output"
+LoadOnAutoCADStartup="True">
+<Commands>
+<Command Local="LICORP_MERGESHEETS" Global="LICORP_MERGESHEETS" />
+</Commands>
+<RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.3" />
+</ComponentEntry>
+</Components>
 
-    <!-- AutoCAD 2026 (R26.x) -->
-    <Components>
-        <ComponentEntry AppName="Licorp MergeSheets"
-            Version="1.0.0"
-            ModuleName="./Contents/Licorp_MergeSheets.dll"
-            AppDescription="Merge DWG files into multi-layout output"
-            LoadOnAutoCADStartup="True">
-            <Commands>
-                <Command Local="LICORP_MERGESHEETS" Global="LICORP_MERGESHEETS" />
-            </Commands>
-            <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.2" />
-        </ComponentEntry>
-    </Components>
+<!-- AutoCAD 2026 (R26.x) - .NET 8.0 -->
+<Components>
+<ComponentEntry AppName="Licorp MergeSheets"
+Version="1.0.0"
+ModuleName="./Contents/2025/Licorp_MergeSheets.dll"
+AppDescription="Merge DWG files into multi-layout output"
+LoadOnAutoCADStartup="True">
+<Commands>
+<Command Local="LICORP_MERGESHEETS" Global="LICORP_MERGESHEETS" />
+</Commands>
+<RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.2" />
+</ComponentEntry>
+</Components>
 
 </ApplicationPackage>

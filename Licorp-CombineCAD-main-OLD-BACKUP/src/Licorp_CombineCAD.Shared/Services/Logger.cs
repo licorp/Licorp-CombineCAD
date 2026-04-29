@@ -148,9 +148,7 @@ namespace Licorp_CombineCAD.Services
         {
             try
             {
-                var output = $"[LicorpCAD] {message}";
-                System.Diagnostics.Debug.WriteLine(output);
-                System.Diagnostics.Trace.WriteLine(output);
+                System.Diagnostics.Debug.WriteLine($"[LicorpCAD] {message}");
             }
             catch { }
         }

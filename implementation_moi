@@ -1,0 +1,164 @@
+# Phương án mới: Gộp ModelSpace trước → Tạo Layout + Clone PaperSpace sau
+
+## Mô tả Vấn đề Hiện tại
+
+Code hiện tại (`MergeToMultiLayout`) thực hiện **đồng thời** clone PaperSpace BTR + ModelSpace cho mỗi file trong cùng một vòng lặp. Do dùng `DuplicateRecordCloning.Ignore`, các Block trùng tên (xuất từ cùng 1 dự án Revit) bị AutoCAD bỏ qua → mọi layout đều hiển thị nội dung giống hệt file đầu tiên.
+
+## Phương án Mới — 2 Giai đoạn
+
+### Tổng quan
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  GIAI ĐOẠN 1: Gộp ModelSpace                           │
+│                                                         │
+│  File1.dwg ──┐                                          │
+│  File2.dwg ──┤──→ outputDb ModelSpace                   │
+│  File3.dwg ──┤    [File1][gap][File2][gap][File3]       │
+│  File4.dwg ──┘                                          │
+│                                                         │
+│  • Đổi tên block trước khi clone (File2_, File3_...)    │
+│  • Ghi nhận offset + viewport info của mỗi file        │
+├─────────────────────────────────────────────────────────┤
+│  GIAI ĐOẠN 2: Tạo Layout + Clone PaperSpace            │
+│                                                         │
+│  Mỗi file → 1 Layout tab:                              │
+│    • Tạo Layout mới (BTR trống)                         │
+│    • Clone HẾT PaperSpace entities vào (khung tên,      │
+│      annotation, viewport, text...)                     │
+│    • Fix viewport → trỏ đến đúng vùng MS đã offset     │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Chi tiết Kỹ thuật
+
+### Cấu trúc dữ liệu trung gian
+
+Tạo class lưu thông tin mỗi file nguồn sau Giai đoạn 1:
+
+```csharp
+private class SourceFileInfo
+{
+    public string FilePath;           // Đường dẫn file gốc
+    public string LayoutName;         // Tên layout sẽ tạo
+    public Vector3d MsOffset;         // Offset đã áp dụng trong ModelSpace
+    public Extents3d MsExtents;       // Vùng tọa độ gốc (chưa offset) trong MS nguồn
+
+    // Thông tin layout gốc — dùng để tạo layout mới
+    public bool ModelType;            // Layout.ModelType
+    public PlotSettings PlotSettingsData; // Plot settings để copy
+}
+```
+
+### Giai đoạn 1: Gộp ModelSpace
+
+**Mục đích**: Đưa tất cả hình vẽ từ ModelSpace của mọi file vào một ModelSpace duy nhất.
+
+```
+Bước 1.0: Mở file đầu tiên → outputDb
+Bước 1.1: Tính extents ModelSpace file đầu tiên → ghi nhận SourceFileInfo[0]
+           (MsOffset = (0,0,0), không cần clone vì đã là file gốc)
+
+Bước 1.2: Vòng lặp file 2 → file N:
+  a) Mở sourceDb, bind Xrefs
+  b) Bắt đầu transaction trên cả sourceDb và outputDb
+  c) ★ RenameBlocksInDb(sourceDb, trans, "File{i}_")
+     → Đổi tên TẤT CẢ block trong sourceDb (trừ layout, anonymous, xref)
+     → Mục đích: khi clone sang outputDb, các block không bị trùng tên
+  d) Clone ModelSpace entities: sourceDb.MS → outputDb.MS
+     → Dùng WblockCloneObjects với DuplicateRecordCloning.Replace
+  e) Dịch chuyển entities vừa clone theo currentXOffset
+  f) Đọc thông tin layout gốc (GetSourceLayout) → lưu PlotSettings
+  g) Ghi nhận SourceFileInfo[i]: offset, extents, plot settings
+  h) Cập nhật currentXOffset += width + khoảng cách
+  i) Commit transactions, đóng sourceDb
+```
+
+> [!IMPORTANT]
+> **Thay đổi quan trọng so với code cũ**: Dùng `DuplicateRecordCloning.Replace` thay vì `Ignore` kết hợp với đổi tên block. Vì block đã được đổi tên nên tên sẽ khác nhau → Replace hay Ignore đều clone được. Nhưng dùng Replace an toàn hơn nếu có block nào vô tình trùng.
+
+### Giai đoạn 2: Tạo Layout + Clone PaperSpace
+
+**Mục đích**: Tạo các tab Layout mới, mang toàn bộ nội dung PaperSpace (khung tên, annotation, viewport...) từ file nguồn vào, rồi fix viewport trỏ đúng.
+
+```
+Bước 2.0: Rename layout gốc của file đầu tiên (Layout1 → tên mong muốn)
+           File đầu tiên đã có sẵn layout + PaperSpace → chỉ cần rename
+
+Bước 2.1: Vòng lặp file 2 → file N:
+  a) Mở lại sourceDb (đọc read-only lần 2)
+  b) Bắt đầu transaction trên cả sourceDb và outputDb  
+  c) ★ RenameBlocksInDb lại (cùng prefix "File{i}_")
+     → Bắt buộc vì PaperSpace chứa BlockReference (khung tên, tag...)
+       mà block definition đã được đổi tên ở Giai đoạn 1
+  d) GetSourceLayout → lấy PaperSpace BTR của file nguồn
+  e) CreateNewLayoutInDb → tạo Layout mới (BTR trống) trong outputDb
+  f) Clone TẤT CẢ PaperSpace entities từ sourceDb BTR → destBtrId
+     → sourceDb.WblockCloneObjects(psIds, destBtrId, ...)
+     → Bao gồm: khung tên, text, dimension, viewport, annotation...
+  g) Copy PlotSettings từ layout gốc → layout mới
+     → Khôi phục BlockTableRecordId, LayoutName, TabOrder sau CopyFrom
+  h) ★ Fix Viewport targets:
+     → Duyệt tất cả viewport trong destBtr
+     → Với mỗi viewport (bỏ qua viewport #1 - layout viewport):
+        vp.ViewCenter += (msOffset.X, msOffset.Y)
+        vp.ViewTarget += (msOffset.X, msOffset.Y, msOffset.Z)
+  i) Commit transactions, đóng sourceDb
+```
+
+> [!NOTE]
+> **Tại sao mở sourceDb 2 lần?**
+> Vì Giai đoạn 1 đã đổi tên block và clone xong ModelSpace. Mở lại lần 2 cho Giai đoạn 2 giúp giữ code sạch sẽ, tránh giữ nhiều database trong bộ nhớ cùng lúc. Tuy nhiên, cũng có thể tối ưu bằng cách gộp 2 giai đoạn trong cùng 1 lần mở (xem phần Tối ưu bên dưới).
+
+### Tối ưu: Gộp 2 giai đoạn trong 1 lần mở file
+
+Để tránh mở mỗi file 2 lần, có thể thực hiện cả 2 giai đoạn trong cùng 1 vòng lặp, nhưng **giữ thứ tự rõ ràng**:
+
+```
+Vòng lặp file 2 → file N:
+  1. Mở sourceDb
+  2. RenameBlocksInDb (1 lần duy nhất)
+  3. [Giai đoạn 1] Clone ModelSpace + offset
+  4. [Giai đoạn 2] Tạo Layout + Clone PaperSpace + Fix viewport
+  5. Đóng sourceDb
+```
+
+> [!IMPORTANT]
+> Cách gộp này **tương đương về logic** nhưng hiệu quả hơn (mở file 1 lần). Đây là cách **khuyến nghị triển khai**. Sự khác biệt cốt lõi so với code cũ là: **đổi tên block trước khi clone bất cứ thứ gì** → giải quyết triệt để lỗi trùng lặp.
+
+## So sánh Code Cũ vs Code Mới
+
+| Bước | Code Cũ | Code Mới |
+|------|---------|----------|
+| Mở file nguồn | Mở 1 lần | Mở 1 lần (giống) |
+| Đổi tên block | ✅ Có (đã thêm) | ✅ Có (giữ nguyên) |
+| Clone ModelSpace | `DuplicateRecordCloning.Ignore` | `DuplicateRecordCloning.Replace` |
+| Clone PaperSpace | Clone BTR entities trước khi biết offset chính xác | Clone SAU khi ModelSpace đã hoàn chỉnh |
+| Tạo Layout | `CreateNewLayoutInDb` | `CreateNewLayoutInDb` (giữ nguyên) |
+| Clone khung tên | Clone cùng lúc PaperSpace BTR | ✅ Clone hết entities PaperSpace (khung tên, text, dimension...) |
+| Fix Viewport | Sửa ViewCenter + ViewTarget | Sửa ViewCenter + ViewTarget (giống nhưng chính xác hơn vì offset đã xác định) |
+| Copy PlotSettings | `CopyFrom` + khôi phục BTR link | Giữ nguyên logic |
+
+## Thứ tự Thực hiện
+
+1. Thêm class `SourceFileInfo` (hoặc tái sử dụng `ViewportInfo` hiện có)
+2. Viết lại `MergeToMultiLayout` theo cấu trúc mới:
+   - Giữ nguyên phần mở file gốc + rename layout
+   - Vòng lặp mới: RenameBlocks → Clone MS → Tạo Layout → Clone PS → Fix VP
+3. Giữ nguyên tất cả helper methods (`RenameBlocksInDb`, `GetSourceLayout`, `CreateNewLayoutInDb`, `GetExtents`, `CleanupDefaultLayouts`)
+4. Đổi `DuplicateRecordCloning.Ignore` → `Replace` cho ModelSpace clone
+
+## File cần sửa
+
+| File | Thay đổi |
+|------|----------|
+| `src.acad\Licorp_MergeSheets\LayoutMerger.cs` | Viết lại `MergeToMultiLayout`, thêm `SourceFileInfo` class |
+
+## Kiểm tra
+
+1. Xuất 3-4 sheet khác nhau từ Revit (HVAC, Plumbing, Structural...)
+2. Chạy merge Mode = MultiLayout
+3. Mở file kết quả:
+   - **Model Space**: Các bản vẽ nằm cạnh nhau, nội dung khác biệt rõ ràng
+   - **Layout tabs**: Mỗi tab có tên đúng, khung tên hiển thị đúng, viewport trỏ đúng vùng
+   - **So sánh**: Mở song song file gốc và layout tương ứng → nội dung phải giống nhau

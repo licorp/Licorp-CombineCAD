@@ -77,17 +77,17 @@ namespace Licorp_CombineCAD.Services
                     {
                         File.Delete(file);
                         deletedCount++;
-                        Debug.WriteLine($"[Cleanup] Deleted XREF: {Path.GetFileName(file)}");
+                        Trace.WriteLine($"[Cleanup] Deleted XREF: {Path.GetFileName(file)}");
                     }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine($"[Cleanup] Failed to delete {Path.GetFileName(file)}: {ex.Message}");
+                        Trace.WriteLine($"[Cleanup] Failed to delete {Path.GetFileName(file)}: {ex.Message}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Cleanup] Error: {ex.Message}");
+                Trace.WriteLine($"[Cleanup] Error: {ex.Message}");
             }
 
             return deletedCount;
@@ -106,12 +106,12 @@ namespace Licorp_CombineCAD.Services
                 if (Directory.Exists(tempPath))
                 {
                     Directory.Delete(tempPath, true);
-                    Debug.WriteLine($"[Cleanup] Deleted temp folder: {tempPath}");
+                    Trace.WriteLine($"[Cleanup] Deleted temp folder: {tempPath}");
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Cleanup] Failed to delete temp folder: {ex.Message}");
+                Trace.WriteLine($"[Cleanup] Failed to delete temp folder: {ex.Message}");
             }
         }
 

@@ -22,20 +22,18 @@ namespace Licorp_CombineCAD
             string assemblyPath = Assembly.GetExecutingAssembly().Location;
             if (string.IsNullOrEmpty(assemblyPath))
             {
-                assemblyPath = Assembly.GetExecutingAssembly().CodeBase;
-                if (assemblyPath.StartsWith("file://"))
-                    assemblyPath = assemblyPath.Replace("file://", "");
-            }
-
-            if (assemblyPath.StartsWith("/"))
-            {
-                assemblyPath = assemblyPath.TrimStart('/');
-                if (assemblyPath.Length > 2 && assemblyPath[1] == ':')
+#pragma warning disable SYSLIB0012 // Assembly.CodeBase is obsolete but needed for .NET Framework fallback
+                string codeBase = Assembly.GetExecutingAssembly().CodeBase;
+#pragma warning restore SYSLIB0012
+                if (!string.IsNullOrEmpty(codeBase) && codeBase.StartsWith("file:///"))
                 {
+                    assemblyPath = new Uri(codeBase).LocalPath;
                 }
-                else
+                else if (!string.IsNullOrEmpty(codeBase))
                 {
-                    assemblyPath = @"C:\" + assemblyPath;
+                    assemblyPath = codeBase.Replace("file://", "").TrimStart('/');
+                    if (assemblyPath.Length > 2 && assemblyPath[1] != ':')
+                        assemblyPath = @"C:\" + assemblyPath;
                 }
             }
 
@@ -130,7 +128,7 @@ var singleLayoutData = new PushButtonData(
                         bitmap.CacheOption = BitmapCacheOption.OnLoad;
                         bitmap.EndInit();
                         button.LargeImage = bitmap;
-                        Debug.WriteLine($"[CombineCAD] Loaded icon: {resourceName}");
+                        Trace.WriteLine($"[CombineCAD] Loaded icon: {resourceName}");
                     }
                     else
                     {
@@ -158,7 +156,7 @@ var singleLayoutData = new PushButtonData(
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[CombineCAD] Error loading icon '{iconName}': {ex.Message}");
+                Trace.WriteLine($"[CombineCAD] Error loading icon '{iconName}': {ex.Message}");
             }
         }
 
@@ -211,7 +209,7 @@ var singleLayoutData = new PushButtonData(
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[CombineCAD] Fallback icon error: {ex.Message}");
+                Trace.WriteLine($"[CombineCAD] Fallback icon error: {ex.Message}");
                 return null;
             }
         }

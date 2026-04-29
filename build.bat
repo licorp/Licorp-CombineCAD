@@ -112,25 +112,18 @@ echo [Build] Revit R2027: bin\R2027\Release\Licorp_CombineCAD.dll
 REM ========================================
 REM SECTION 6: Build AutoCAD Plugin
 REM ========================================
-if defined AUTOCAD_PATH (
     echo.
-    echo [Build] Building AutoCAD plugin for v!AUTOCAD_VER!...
+    echo [Build] Building AutoCAD plugin (cross-compiling for .NET 4.8 and .NET 8.0)...
 
-    dotnet build src.acad\Licorp_MergeSheets\Licorp_MergeSheets.csproj ^
-        -c Release ^
-        --nologo ^
-        -p:AutoCADPath="!AUTOCAD_PATH!"
+    dotnet build src.acad\Licorp_MergeSheets\Licorp_MergeSheets.csproj -c Release --nologo
 
     if errorlevel 1 (
         echo.
-        echo [WARNING] AutoCAD plugin build FAILED (check AutoCAD installation)
+        echo [WARNING] AutoCAD plugin build FAILED
     ) else (
-        echo [Build] AutoCAD plugin: bin\acad\Release\Licorp_MergeSheets.dll
+        echo [Build] AutoCAD plugin (2024): bin\acad\Release\net48\Licorp_MergeSheets.dll
+        echo [Build] AutoCAD plugin (2025): bin\acad\Release\net8.0-windows\Licorp_MergeSheets.dll
     )
-) else (
-    echo.
-    echo [Skip] AutoCAD plugin skipped (AutoCAD not found)
-)
 
 REM ========================================
 REM SUCCESS

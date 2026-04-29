@@ -109,19 +109,30 @@ if exist "%ACAD_BUNDLE%" rd /s /q "%ACAD_BUNDLE%" 2>nul
 mkdir "%ACAD_BUNDLE%"
 
 if "%ACAD_SKIP%"=="0" (
-    set "ACAD_SRC=%ROOT%bin\acad\Release"
+set "ACAD_SRC=%ROOT%bin\acad\Release"
 
-if exist "!ACAD_SRC!\Licorp_MergeSheets.dll" (
-    REM Create Contents subfolder and copy DLLs
-    if not exist "%ACAD_BUNDLE%\Contents" mkdir "%ACAD_BUNDLE%\Contents"
-    xcopy "!ACAD_SRC!\Licorp_MergeSheets.dll" "%ACAD_BUNDLE%\Contents\" /Y /Q >nul 2>&1
-    xcopy "!ACAD_SRC!\Newtonsoft.Json.dll" "%ACAD_BUNDLE%\Contents\" /Y /Q >nul 2>&1
+REM Create Contents subfolders
+if not exist "%ACAD_BUNDLE%\Contents\2024" mkdir "%ACAD_BUNDLE%\Contents\2024"
+if not exist "%ACAD_BUNDLE%\Contents\2025" mkdir "%ACAD_BUNDLE%\Contents\2025"
 
-    REM Copy PackageContents.xml from source
-    copy /Y "!ROOT!src.acad\Licorp_MergeSheets\PackageContents.xml" "%ACAD_BUNDLE%\" >nul 2>&1
-
-    echo AutoCAD - MergeSheets.dll + Newtonsoft.Json.dll + PackageContents.xml
+REM Copy net48 DLL (AutoCAD 2024)
+if exist "!ACAD_SRC!\net48\Licorp_MergeSheets.dll" (
+xcopy "!ACAD_SRC!\net48\Licorp_MergeSheets.dll" "%ACAD_BUNDLE%\Contents\2024\" /Y /Q >nul 2>&1
+xcopy "!ACAD_SRC!\net48\Newtonsoft.Json.dll" "%ACAD_BUNDLE%\Contents\2024\" /Y /Q >nul 2>&1
+echo AutoCAD [net48] - OK
 )
+
+REM Copy net8.0 DLL (AutoCAD 2025+)
+if exist "!ACAD_SRC!\net8.0-windows\Licorp_MergeSheets.dll" (
+xcopy "!ACAD_SRC!\net8.0-windows\Licorp_MergeSheets.dll" "%ACAD_BUNDLE%\Contents\2025\" /Y /Q >nul 2>&1
+xcopy "!ACAD_SRC!\net8.0-windows\Newtonsoft.Json.dll" "%ACAD_BUNDLE%\Contents\2025\" /Y /Q >nul 2>&1
+echo AutoCAD [net8.0] - OK
+)
+
+REM Copy PackageContents.xml from source
+copy /Y "!ROOT!src.acad\Licorp_MergeSheets\PackageContents.xml" "%ACAD_BUNDLE%\" >nul 2>&1
+
+echo AutoCAD - Contents\2024\ and Contents\2025\ deployed
 ) else (
     echo       AutoCAD - Skipped (build failed)
 )
