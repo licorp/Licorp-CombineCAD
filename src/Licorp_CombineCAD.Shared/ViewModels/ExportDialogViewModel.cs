@@ -26,6 +26,7 @@ namespace Licorp_CombineCAD.ViewModels
         private readonly SheetCollectorService _sheetCollector;
         private readonly DwgExportService _exportService;
         private readonly SheetPreflightService _preflightService;
+        private readonly SheetScheduleService _sheetScheduleService;
         private readonly ProfileService _profileService;
         private readonly ExportProfile _profile;
 
@@ -37,7 +38,12 @@ namespace Licorp_CombineCAD.ViewModels
         private bool _smartViewScale = false;
         private bool _openAfterExport = false;
         private bool _progressAlwaysOnTop = true;
+        private bool _createSheetSet = true;
+        private bool _verifyCombinedDwg = true;
         private bool _isExporting = false;
+        private string _selectedMergeEngine = "AcCoreConsole";
+        private string _selectedRasterImageMode = "Keep Reference";
+        private SheetScheduleInfo _selectedSheetSchedule;
         private int _selectedCount = 0;
         private CancellationTokenSource _cancellationTokenSource;
         private string _statusMessage = "";
@@ -54,12 +60,14 @@ namespace Licorp_CombineCAD.ViewModels
             _sheetCollector = new SheetCollectorService(_document);
             _exportService = new DwgExportService(_document);
             _preflightService = new SheetPreflightService(_document);
+            _sheetScheduleService = new SheetScheduleService(_document);
             _profileService = new ProfileService();
             _profile = _profileService.LoadLastProfile();
 
             _revitThreadService = new RevitThreadService();
 
             LoadSheets();
+            LoadSheetSchedules();
             LoadProfileSettings();
 
             var setups = _exportService.GetAvailableExportSetups();
@@ -149,6 +157,18 @@ namespace Licorp_CombineCAD.ViewModels
             set { _progressAlwaysOnTop = value; OnPropertyChanged(); }
         }
 
+        public bool CreateSheetSet
+        {
+            get => _createSheetSet;
+            set { _createSheetSet = value; OnPropertyChanged(); }
+        }
+
+        public bool VerifyCombinedDwg
+        {
+            get => _verifyCombinedDwg;
+            set { _verifyCombinedDwg = value; OnPropertyChanged(); }
+        }
+
         public bool IsExporting
         {
             get => _isExporting;
@@ -190,12 +210,37 @@ namespace Licorp_CombineCAD.ViewModels
             set { _selectedDwgVersion = value; OnPropertyChanged(); }
         }
 
-        public ObservableCollection<string> AvailableSortModes { get; } = new ObservableCollection<string> { "Sheet Number", "Name", "Custom" };
+        public ObservableCollection<string> AvailableSortModes { get; } = new ObservableCollection<string> { "Sheet Number", "Name", "Custom", "Revit Sheet Schedule" };
         private string _selectedSortMode = "Sheet Number";
         public string SelectedSortMode
         {
             get => _selectedSortMode;
-            set { _selectedSortMode = value; OnPropertyChanged(); ApplySort(); OnPropertyChanged(nameof(FilteredSheets)); }
+            set
+            {
+                _selectedSortMode = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsSheetScheduleSort));
+                ApplySort();
+                OnPropertyChanged(nameof(FilteredSheets));
+            }
+        }
+
+        public bool IsSheetScheduleSort => SelectedSortMode == "Revit Sheet Schedule";
+
+        public ObservableCollection<SheetScheduleInfo> AvailableSheetSchedules { get; } = new ObservableCollection<SheetScheduleInfo>();
+        public SheetScheduleInfo SelectedSheetSchedule
+        {
+            get => _selectedSheetSchedule;
+            set
+            {
+                _selectedSheetSchedule = value;
+                OnPropertyChanged();
+                if (IsSheetScheduleSort)
+                {
+                    ApplySort();
+                    OnPropertyChanged(nameof(FilteredSheets));
+                }
+            }
         }
 
         public ObservableCollection<string> AvailableVerticalAlignments { get; } = new ObservableCollection<string> { "Top", "Center", "Bottom" };
@@ -227,6 +272,20 @@ namespace Licorp_CombineCAD.ViewModels
             set { _createSubfolders = value; OnPropertyChanged(); }
         }
 
+        public ObservableCollection<string> AvailableMergeEngines { get; } = new ObservableCollection<string> { "AcCoreConsole", "Full AutoCAD" };
+        public string SelectedMergeEngine
+        {
+            get => _selectedMergeEngine;
+            set { _selectedMergeEngine = value; OnPropertyChanged(); }
+        }
+
+        public ObservableCollection<string> AvailableRasterImageModes { get; } = new ObservableCollection<string> { "Keep Reference", "Embed as OLE" };
+        public string SelectedRasterImageMode
+        {
+            get => _selectedRasterImageMode;
+            set { _selectedRasterImageMode = value; OnPropertyChanged(); }
+        }
+
         public ICommand SelectAllCommand { get; }
         public ICommand DeselectAllCommand { get; }
         public ICommand BrowseFolderCommand { get; }
@@ -248,6 +307,16 @@ namespace Licorp_CombineCAD.ViewModels
             ApplySort();
         }
 
+        private void LoadSheetSchedules()
+        {
+            AvailableSheetSchedules.Clear();
+            foreach (var schedule in _sheetScheduleService.GetSheetListSchedules())
+                AvailableSheetSchedules.Add(schedule);
+
+            if (AvailableSheetSchedules.Count > 0)
+                SelectedSheetSchedule = AvailableSheetSchedules[0];
+        }
+
         public void ReorderSheet(SheetItemViewModel source, SheetItemViewModel target)
         {
             var sourceIndex = AllSheets.IndexOf(source);
@@ -266,6 +335,12 @@ namespace Licorp_CombineCAD.ViewModels
             var mode = SelectedSortMode;
             if (mode == "Custom") return;
 
+            if (mode == "Revit Sheet Schedule")
+            {
+                ApplyRevitScheduleSort();
+                return;
+            }
+
             var items = AllSheets.ToList();
             AllSheets.Clear();
 
@@ -278,6 +353,39 @@ namespace Licorp_CombineCAD.ViewModels
                 items = items.OrderBy(s => s.SheetNumber, new NaturalStringComparer()).ToList();
             }
 
+            foreach (var item in items)
+                AllSheets.Add(item);
+        }
+
+        private void ApplyRevitScheduleSort()
+        {
+            var items = AllSheets.ToList();
+            if (items.Count == 0)
+                return;
+
+            var orderedNumbers = _sheetScheduleService.GetOrderedSheetNumbers(
+                SelectedSheetSchedule?.ElementIdValue,
+                items.Select(i => i.Model));
+
+            if (orderedNumbers.Count == 0)
+            {
+                Trace.WriteLine("[SheetSchedule] No usable schedule order found; falling back to sheet number order");
+                items = items.OrderBy(s => s.SheetNumber, new NaturalStringComparer()).ToList();
+            }
+            else
+            {
+                var rank = orderedNumbers
+                    .Select((number, index) => new { number, index })
+                    .GroupBy(x => x.number, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First().index, StringComparer.OrdinalIgnoreCase);
+
+                items = items
+                    .OrderBy(s => rank.TryGetValue(s.SheetNumber ?? "", out var order) ? order : int.MaxValue)
+                    .ThenBy(s => s.SheetNumber, new NaturalStringComparer())
+                    .ToList();
+            }
+
+            AllSheets.Clear();
             foreach (var item in items)
                 AllSheets.Add(item);
         }
@@ -479,9 +587,15 @@ namespace Licorp_CombineCAD.ViewModels
                         _progressVm.UpdatePhase("Merging");
 
                         var accorePath = AutoCadLocatorService.FindAcCoreConsole(SelectedAutoCADVersion);
-                        var mergeService = new DwgMergeService(accorePath);
+                        var acadPath = AutoCadLocatorService.FindAutoCAD(SelectedAutoCADVersion);
+                        var mergeService = new DwgMergeService(accorePath, settings.MergeEngine, acadPath);
                         mergeService.SetVerticalAlignment(settings.VerticalAlign.ToString());
                         mergeService.SetDwgVersion(settings.DwgVersion ?? "Current");
+                        mergeService.SetReliabilityOptions(
+                            settings.VerifyCombinedDwg,
+                            settings.CreateSheetSet,
+                            settings.RasterImageMode.ToString(),
+                            exportedFiles.Count);
                         var exportedSheets = exportResult?.ExportedSheets ?? new List<SheetInfo>();
                         var layoutNames = exportedSheets.Select(s => $"{s.SheetNumber} - {s.SheetName}").ToList();
                         if (layoutNames.Count != exportedFiles.Count)
@@ -510,9 +624,19 @@ namespace Licorp_CombineCAD.ViewModels
                         }
                         else
                         {
-                            StatusMessage = "Merge failed.";
-                            if (OpenAfterExport && exportedFiles.Count > 0)
-                                fileToOpen = exportedFiles.First();
+                            StatusMessage = "Combine failed. Individual DWG files were exported, but the combined DWG is not valid.";
+                            var logPath = mergeService.LastLogPath;
+                            var detail = string.IsNullOrWhiteSpace(mergeService.LastError)
+                                ? "See merge log for details."
+                                : mergeService.LastError;
+                            await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                MessageBox.Show(
+                                    detail + (string.IsNullOrWhiteSpace(logPath) ? "" : $"\n\nLog: {logPath}"),
+                                    "Combine Failed",
+                                    MessageBoxButton.OK,
+                                    MessageBoxImage.Warning);
+                            }));
                         }
                     }
                     else
@@ -642,10 +766,19 @@ namespace Licorp_CombineCAD.ViewModels
             var sortMode = SortMode.SheetNumber;
             if (SelectedSortMode == "Name") sortMode = SortMode.Name;
             else if (SelectedSortMode == "Custom") sortMode = SortMode.Custom;
+            else if (SelectedSortMode == "Revit Sheet Schedule") sortMode = SortMode.RevitSheetSchedule;
 
             var verticalAlign = Models.VerticalAlignment.Top;
             if (SelectedVerticalAlignment == "Center") verticalAlign = Models.VerticalAlignment.Center;
             else if (SelectedVerticalAlignment == "Bottom") verticalAlign = Models.VerticalAlignment.Bottom;
+
+            var mergeEngine = SelectedMergeEngine == "Full AutoCAD"
+                ? MergeEngine.FullAutoCAD
+                : MergeEngine.AcCoreConsole;
+
+            var rasterImageMode = SelectedRasterImageMode == "Embed as OLE"
+                ? RasterImageMode.EmbedAsOle
+                : RasterImageMode.KeepReference;
 
             return new ExportSettings
             {
@@ -658,6 +791,12 @@ namespace Licorp_CombineCAD.ViewModels
                 SmartViewScale = SmartViewScale,
                 OpenAfterExport = OpenAfterExport,
                 ProgressAlwaysOnTop = ProgressAlwaysOnTop,
+                OrderRuleSource = SelectedSortMode,
+                SelectedSheetScheduleId = SelectedSheetSchedule?.ElementIdValue ?? "",
+                CreateSheetSet = CreateSheetSet,
+                RasterImageMode = rasterImageMode,
+                MergeEngine = mergeEngine,
+                VerifyCombinedDwg = VerifyCombinedDwg,
                 VerticalAlign = verticalAlign,
                 SortMode = sortMode,
                 PreserveCoincidentLines = PreserveCoincidentLines,
@@ -685,10 +824,16 @@ private void SaveSettings()
         _profile.AutoBindXRef = AutoBindXRef;
         _profile.SmartViewScale = SmartViewScale;
         _profile.OpenAfterExport = OpenAfterExport;
+        _profile.ProgressAlwaysOnTop = ProgressAlwaysOnTop;
         _profile.PreserveCoincidentLines = PreserveCoincidentLines;
         _profile.CreateSubfolders = CreateSubfolders;
         _profile.SortMode = SelectedSortMode;
+        _profile.SelectedSheetScheduleId = SelectedSheetSchedule?.ElementIdValue ?? "";
         _profile.VerticalAlign = SelectedVerticalAlignment;
+        _profile.CreateSheetSet = CreateSheetSet;
+        _profile.RasterImageMode = SelectedRasterImageMode == "Embed as OLE" ? "EmbedAsOle" : "KeepReference";
+        _profile.MergeEngine = SelectedMergeEngine == "Full AutoCAD" ? "FullAutoCAD" : "AcCoreConsole";
+        _profile.VerifyCombinedDwg = VerifyCombinedDwg;
         _profile.LastUsed = DateTime.Now;
         _profileService.SaveLastProfile(_profile);
     }
@@ -710,12 +855,23 @@ private void SaveSettings()
 AutoBindXRef = _profile.AutoBindXRef;
         SmartViewScale = _profile.SmartViewScale;
         OpenAfterExport = _profile.OpenAfterExport;
+        ProgressAlwaysOnTop = _profile.ProgressAlwaysOnTop;
         PreserveCoincidentLines = _profile.PreserveCoincidentLines;
         CreateSubfolders = _profile.CreateSubfolders;
         if (!string.IsNullOrEmpty(_profile.SortMode) && AvailableSortModes.Contains(_profile.SortMode))
             SelectedSortMode = _profile.SortMode;
+        if (!string.IsNullOrEmpty(_profile.SelectedSheetScheduleId))
+        {
+            var savedSchedule = AvailableSheetSchedules.FirstOrDefault(s => s.ElementIdValue == _profile.SelectedSheetScheduleId);
+            if (savedSchedule != null)
+                SelectedSheetSchedule = savedSchedule;
+        }
         if (!string.IsNullOrEmpty(_profile.VerticalAlign) && AvailableVerticalAlignments.Contains(_profile.VerticalAlign))
             SelectedVerticalAlignment = _profile.VerticalAlign;
+        CreateSheetSet = _profile.CreateSheetSet;
+        SelectedRasterImageMode = _profile.RasterImageMode == "EmbedAsOle" ? "Embed as OLE" : "Keep Reference";
+        SelectedMergeEngine = _profile.MergeEngine == "FullAutoCAD" ? "Full AutoCAD" : "AcCoreConsole";
+        VerifyCombinedDwg = _profile.VerifyCombinedDwg;
     }
 
     private async Task OpenWithAutoCADAsync(string filePath)

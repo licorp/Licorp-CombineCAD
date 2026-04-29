@@ -8,6 +8,12 @@ namespace Licorp_MergeSheets
         public string OutputPath { get; set; }
         public string VerticalAlign { get; set; } = "Top";
         public string DwgVersion { get; set; } = "Current";
+        public int ExpectedSheetCount { get; set; }
+        public bool VerifyAfterSave { get; set; } = true;
+        public bool SheetSetEnabled { get; set; } = true;
+        public string SheetSetIndexPath { get; set; }
+        public string RasterImageMode { get; set; } = "KeepReference";
+        public string StatusPath { get; set; }
         public List<SourceFile> SourceFiles { get; set; }
     }
 

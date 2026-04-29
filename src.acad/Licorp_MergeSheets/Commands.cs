@@ -17,6 +17,9 @@ namespace Licorp_MergeSheets
         {
             string configPath = null;
             bool silentMode = false;
+            MergeConfig config = null;
+            bool success = false;
+            string statusMessage = null;
 
             try
             {
@@ -54,11 +57,12 @@ namespace Licorp_MergeSheets
                 var configJson = File.ReadAllText(configPath);
                 AcadLogger.LogDebug($"Config JSON length: {configJson.Length}");
 
-                var config = JsonConvert.DeserializeObject<MergeConfig>(configJson);
+                config = JsonConvert.DeserializeObject<MergeConfig>(configJson);
 
                 if (config == null)
                 {
                     AcadLogger.LogError("Failed to deserialize config");
+                    statusMessage = "Failed to deserialize merge config.";
                     return;
                 }
 
@@ -67,6 +71,10 @@ namespace Licorp_MergeSheets
                 AcadLogger.LogInfo($"Output: {config.OutputPath}");
                 AcadLogger.LogInfo($"Source files: {config.SourceFiles?.Count ?? 0}");
                 AcadLogger.LogInfo($"DwgVersion: {config.DwgVersion}");
+                AcadLogger.LogInfo($"ExpectedSheetCount: {config.ExpectedSheetCount}");
+                AcadLogger.LogInfo($"VerifyAfterSave: {config.VerifyAfterSave}");
+                AcadLogger.LogInfo($"SheetSetEnabled: {config.SheetSetEnabled}");
+                AcadLogger.LogInfo($"RasterImageMode: {config.RasterImageMode}");
 
                 if (config.SourceFiles != null)
                 {
@@ -79,7 +87,6 @@ namespace Licorp_MergeSheets
 
                 AcadLogger.LogSection("Starting Merge Operation");
                 var merger = new LayoutMerger();
-                bool success = false;
 
                 switch (config.Mode)
                 {
@@ -97,7 +104,20 @@ namespace Licorp_MergeSheets
                         break;
                     default:
                         AcadLogger.LogError($"Unknown mode: {config.Mode}");
+                        statusMessage = $"Unknown merge mode: {config.Mode}";
                         return;
+                }
+
+                if (success && config.VerifyAfterSave)
+                {
+                    AcadLogger.LogSection("Post-Save Verification");
+                    success = merger.VerifyCombinedFile(config, out statusMessage);
+                }
+
+                if (success)
+                {
+                    merger.HandleRasterImages(config);
+                    merger.CreateSheetSetIndex(config);
                 }
 
                 if (success)
@@ -113,11 +133,15 @@ namespace Licorp_MergeSheets
                 }
                 else
                 {
+                    if (string.IsNullOrWhiteSpace(statusMessage))
+                        statusMessage = "Merge failed. Check merge log for details.";
                     AcadLogger.LogError("Merge FAILED - check logs above for details");
                 }
             }
             catch (System.Exception ex)
             {
+                success = false;
+                statusMessage = ex.Message;
                 AcadLogger.LogSection("EXCEPTION CAUGHT");
                 AcadLogger.LogError($"Message: {ex.Message}");
                 AcadLogger.LogError($"Type: {ex.GetType().FullName}");
@@ -130,6 +154,8 @@ namespace Licorp_MergeSheets
             }
             finally
             {
+                WriteStatus(config, success, statusMessage);
+
                 if (silentMode && File.Exists(SilentConfigPath))
                 {
                     try { File.Delete(SilentConfigPath); }
@@ -137,6 +163,32 @@ namespace Licorp_MergeSheets
                 }
 
                 AcadLogger.LogSection("Command Finished");
+            }
+        }
+
+        private void WriteStatus(MergeConfig config, bool success, string message)
+        {
+            try
+            {
+                if (config == null || string.IsNullOrWhiteSpace(config.StatusPath))
+                    return;
+
+                var status = new
+                {
+                    Success = success,
+                    Message = string.IsNullOrWhiteSpace(message)
+                        ? (success ? "Merge completed successfully." : "Merge failed.")
+                        : message,
+                    OutputPath = config.OutputPath,
+                    LogPath = AcadLogger.GetLogFilePath()
+                };
+
+                File.WriteAllText(config.StatusPath, JsonConvert.SerializeObject(status, Formatting.Indented));
+                AcadLogger.LogInfo($"Status written: {config.StatusPath}");
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"Failed to write status file: {ex.Message}");
             }
         }
     }

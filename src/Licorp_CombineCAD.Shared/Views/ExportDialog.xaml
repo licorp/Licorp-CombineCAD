@@ -6,7 +6,7 @@
         xmlns:converters="clr-namespace:Licorp_CombineCAD.Views.Converters"
         mc:Ignorable="d"
         Title="Export to DWG - CombineCAD"
-        Height="700" Width="1000"
+        Height="760" Width="1000"
         MinHeight="500" MinWidth="800"
         WindowStartupLocation="CenterOwner"
         Background="#1E1E1E"
@@ -237,11 +237,29 @@
         <CheckBox Content="Open after export" IsChecked="{Binding OpenAfterExport}" Style="{StaticResource ModernCheckBox}"/>
         <CheckBox Content="Progress always on top" IsChecked="{Binding ProgressAlwaysOnTop}" Style="{StaticResource ModernCheckBox}"/>
 
+        <!-- Advanced Reliability -->
+        <TextBlock Text="Advanced Reliability" Style="{StaticResource SectionHeader}"/>
+        <TextBlock Text="Merge Engine" Foreground="#808080" Margin="0,0,0,4"/>
+        <ComboBox ItemsSource="{Binding AvailableMergeEngines}"
+                  SelectedItem="{Binding SelectedMergeEngine}"
+                  Style="{StaticResource ModernComboBox}"/>
+        <CheckBox Content="Verify combined DWG after save" IsChecked="{Binding VerifyCombinedDwg}" Style="{StaticResource ModernCheckBox}"/>
+        <CheckBox Content="Create Sheet Set index" IsChecked="{Binding CreateSheetSet}" Style="{StaticResource ModernCheckBox}"/>
+        <TextBlock Text="Raster Image Mode" Foreground="#808080" Margin="0,8,0,4"/>
+        <ComboBox ItemsSource="{Binding AvailableRasterImageModes}"
+                  SelectedItem="{Binding SelectedRasterImageMode}"
+                  Style="{StaticResource ModernComboBox}"/>
+
         <!-- Sort Order -->
         <TextBlock Text="Sort By" Style="{StaticResource SectionHeader}"/>
         <ComboBox ItemsSource="{Binding AvailableSortModes}"
                   SelectedItem="{Binding SelectedSortMode}"
                   Style="{StaticResource ModernComboBox}"/>
+        <ComboBox ItemsSource="{Binding AvailableSheetSchedules}"
+                  SelectedItem="{Binding SelectedSheetSchedule}"
+                  Style="{StaticResource ModernComboBox}"
+                  Margin="0,8,0,0"
+                  Visibility="{Binding IsSheetScheduleSort, Converter={StaticResource BoolToVisibleConverter}}"/>
 
         <!-- Vertical Alignment -->
         <TextBlock Text="Vertical Alignment" Style="{StaticResource SectionHeader}"/>

@@ -3,62 +3,75 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Licorp_CombineCAD.Models;
+using Newtonsoft.Json;
 
 namespace Licorp_CombineCAD.Services
 {
     /// <summary>
     /// Merges multiple DWG files into a single DWG with multiple layouts (MultiLayout),
     /// single layout (SingleLayout), or Model Space export.
-    /// Core feature — requires AutoCAD/AcCoreConsole + Licorp_MergeSheets plugin.
     /// </summary>
-public class DwgMergeService
-{
-    private readonly string _accoreconsolePath;
-    private readonly string _pluginPath;
-    private string _verticalAlign = "Top";
-    private string _dwgVersion = "Current";
-
-public DwgMergeService(string accoreconsolePath = null)
-{
-_accoreconsolePath = accoreconsolePath ?? AutoCadLocatorService.FindAcCoreConsole();
-
-var pluginDir = Path.Combine(
-Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-@"Autodesk\ApplicationPlugins\Licorp_MergeSheets.bundle");
-
-string subFolder = "2024";
-if (!string.IsNullOrEmpty(_accoreconsolePath))
-{
-var accoreDir = Path.GetDirectoryName(_accoreconsolePath).ToLowerInvariant();
-if (accoreDir.Contains("2025") || accoreDir.Contains("2026") || accoreDir.Contains("2027"))
-{
-subFolder = "2025";
-}
-}
-_pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets.dll");
-}
-
-    public bool IsAvailable => !string.IsNullOrEmpty(_accoreconsolePath);
-
-    public bool IsPluginLoaded => File.Exists(_pluginPath);
-
-    public void SetDwgVersion(string version)
+    public class DwgMergeService
     {
-        _dwgVersion = version ?? "Current";
-    }
+        private readonly string _accoreconsolePath;
+        private readonly string _acadPath;
+        private readonly string _pluginPath;
+        private readonly MergeEngine _mergeEngine;
 
-    public void SetVerticalAlignment(string alignment)
+        private string _verticalAlign = "Top";
+        private string _dwgVersion = "Current";
+        private bool _verifyAfterSave = true;
+        private bool _sheetSetEnabled = true;
+        private string _rasterImageMode = "KeepReference";
+        private int _expectedSheetCount;
+        private bool _lastRunReturnedPluginStatus;
+
+        public DwgMergeService(
+            string accoreconsolePath = null,
+            MergeEngine mergeEngine = MergeEngine.AcCoreConsole,
+            string acadPath = null)
+        {
+            _accoreconsolePath = accoreconsolePath ?? AutoCadLocatorService.FindAcCoreConsole();
+            _acadPath = acadPath ?? AutoCadLocatorService.FindAutoCAD();
+            _mergeEngine = mergeEngine;
+
+            var pluginDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                @"Autodesk\ApplicationPlugins\Licorp_MergeSheets.bundle");
+
+            var enginePath = !string.IsNullOrEmpty(_accoreconsolePath) ? _accoreconsolePath : _acadPath;
+            _pluginPath = Path.Combine(pluginDir, "Contents", GetPluginSubFolder(enginePath), "Licorp_MergeSheets.dll");
+        }
+
+        public bool IsAvailable => !string.IsNullOrEmpty(_accoreconsolePath) || !string.IsNullOrEmpty(_acadPath);
+
+        public bool IsPluginLoaded => File.Exists(_pluginPath);
+
+        public string LastError { get; private set; }
+
+        public string LastLogPath { get; private set; }
+
+        public void SetDwgVersion(string version)
+        {
+            _dwgVersion = version ?? "Current";
+        }
+
+        public void SetVerticalAlignment(string alignment)
         {
             _verticalAlign = alignment ?? "Top";
         }
 
-        /// <summary>
-        /// Ensure the merge plugin is installed for AcCoreConsole
-        /// </summary>
+        public void SetReliabilityOptions(bool verifyAfterSave, bool sheetSetEnabled, string rasterImageMode, int expectedSheetCount)
+        {
+            _verifyAfterSave = verifyAfterSave;
+            _sheetSetEnabled = sheetSetEnabled;
+            _rasterImageMode = string.IsNullOrWhiteSpace(rasterImageMode) ? "KeepReference" : rasterImageMode;
+            _expectedSheetCount = Math.Max(0, expectedSheetCount);
+        }
+
         public void EnsurePluginInstalled()
         {
             if (IsPluginLoaded) return;
@@ -67,15 +80,17 @@ _pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets
             {
                 var pluginDir = Path.GetDirectoryName(_pluginPath);
                 if (!Directory.Exists(pluginDir))
-                {
                     Directory.CreateDirectory(pluginDir);
-                }
 
                 var sourceDll = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "acad", "Release", "Licorp_MergeSheets.dll");
                 if (File.Exists(sourceDll))
                 {
                     File.Copy(sourceDll, _pluginPath, true);
                     Trace.WriteLine($"[Merge] Plugin installed to: {_pluginPath}");
+                }
+                else
+                {
+                    Trace.WriteLine($"[Merge] Plugin source DLL not found: {sourceDll}");
                 }
             }
             catch (Exception ex)
@@ -84,9 +99,6 @@ _pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets
             }
         }
 
-        /// <summary>
-        /// Merge multiple DWG files into one file with multiple layouts (each source = 1 layout)
-        /// </summary>
         public async Task<bool> MergeToMultiLayoutAsync(
             List<string> dwgFiles,
             string outputPath,
@@ -94,53 +106,7 @@ _pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets
             IProgress<MergeProgressInfo> progress = null,
             CancellationToken cancellationToken = default)
         {
-            if (dwgFiles == null || dwgFiles.Count == 0)
-                return false;
-
-            if (!IsAvailable)
-            {
-                Trace.WriteLine("[Merge] AcCoreConsole not available");
-                return false;
-            }
-
-            var validFiles = dwgFiles.Where(f => File.Exists(f)).ToList();
-            if (validFiles.Count == 0)
-            {
-                Trace.WriteLine("[Merge] No valid source files");
-                return false;
-            }
-
-            try
-            {
-                EnsurePluginInstalled();
-
-                var config = CreateMergeConfig(validFiles, layoutNames, outputPath, "MultiLayout");
-                var configPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Merge_{Guid.NewGuid()}.json");
-                var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Merge_{Guid.NewGuid()}.scr");
-
-                File.WriteAllText(configPath, config);
-                CreateMergeScript(scriptPath, configPath, outputPath);
-
-                progress?.Report(new MergeProgressInfo
-                {
-                    Phase = "Merging",
-                    CurrentItem = "Starting merge...",
-                    Current = 0,
-                    Total = validFiles.Count
-                });
-
-                var success = await RunAcCoreConsoleAsync(scriptPath, validFiles[0], outputPath, 300000, cancellationToken);
-
-                try { File.Delete(configPath); } catch { }
-                try { File.Delete(scriptPath); } catch { }
-
-                return success;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Merge] Error: {ex.Message}");
-                return false;
-            }
+            return await MergeAsync(dwgFiles, outputPath, layoutNames, "MultiLayout", null, progress, cancellationToken);
         }
 
         public async Task<bool> MergeToSingleLayoutAsync(
@@ -150,40 +116,11 @@ _pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets
             IProgress<MergeProgressInfo> progress = null,
             CancellationToken cancellationToken = default)
         {
-            if (dwgFiles == null || dwgFiles.Count == 0)
-                return false;
+            var layoutNames = dwgFiles == null
+                ? null
+                : Enumerable.Repeat(layoutName, dwgFiles.Count).ToList();
 
-            if (!IsAvailable)
-                return false;
-
-            var validFiles = dwgFiles.Where(f => File.Exists(f)).ToList();
-            if (validFiles.Count == 0)
-                return false;
-
-            try
-            {
-                EnsurePluginInstalled();
-
-                var layoutNames = Enumerable.Repeat(layoutName, validFiles.Count).ToList();
-                var config = CreateMergeConfig(validFiles, layoutNames, outputPath, "SingleLayout");
-                var configPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Single_{Guid.NewGuid()}.json");
-                var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Single_{Guid.NewGuid()}.scr");
-
-                File.WriteAllText(configPath, config);
-                CreateMergeScript(scriptPath, configPath, outputPath);
-
-                var success = await RunAcCoreConsoleAsync(scriptPath, validFiles[0], outputPath, 300000, cancellationToken);
-
-                try { File.Delete(configPath); } catch { }
-                try { File.Delete(scriptPath); } catch { }
-
-                return success;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Merge] SingleLayout error: {ex.Message}");
-                return false;
-            }
+            return await MergeAsync(dwgFiles, outputPath, layoutNames, "SingleLayout", null, progress, cancellationToken);
         }
 
         public async Task<bool> MergeToModelSpaceAsync(
@@ -193,89 +130,163 @@ _pluginPath = Path.Combine(pluginDir, "Contents", subFolder, "Licorp_MergeSheets
             IProgress<MergeProgressInfo> progress = null,
             CancellationToken cancellationToken = default)
         {
+            string seedPath = null;
+            try
+            {
+                var firstValid = dwgFiles?.FirstOrDefault(File.Exists);
+                if (string.IsNullOrWhiteSpace(firstValid))
+                {
+                    LastError = "No valid source files for ModelSpace merge.";
+                    return false;
+                }
+
+                seedPath = CreateConsoleSeedFile(firstValid);
+                return await MergeAsync(dwgFiles, outputPath, layoutNames, "ModelSpace", seedPath, progress, cancellationToken);
+            }
+            finally
+            {
+                TryDeleteTempFile(seedPath);
+            }
+        }
+
+        private async Task<bool> MergeAsync(
+            List<string> dwgFiles,
+            string outputPath,
+            List<string> layoutNames,
+            string mode,
+            string inputOverride,
+            IProgress<MergeProgressInfo> progress,
+            CancellationToken cancellationToken)
+        {
+            LastError = null;
+            LastLogPath = null;
+
             if (dwgFiles == null || dwgFiles.Count == 0)
+            {
+                LastError = "No source DWG files were supplied.";
                 return false;
+            }
 
             if (!IsAvailable)
+            {
+                LastError = "AutoCAD/AcCoreConsole is not available.";
+                Trace.WriteLine("[Merge] AutoCAD engine not available");
                 return false;
+            }
 
-            var validFiles = dwgFiles.Where(f => File.Exists(f)).ToList();
+            var validFiles = dwgFiles.Where(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f)).ToList();
             if (validFiles.Count == 0)
+            {
+                LastError = "No valid source DWG files exist on disk.";
+                Trace.WriteLine("[Merge] No valid source files");
                 return false;
+            }
 
             string configPath = null;
             string scriptPath = null;
-            string seedPath = null;
+            string statusPath = null;
 
             try
             {
                 EnsurePluginInstalled();
 
-                var config = CreateMergeConfig(validFiles, layoutNames, outputPath, "ModelSpace");
-                configPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Model_{Guid.NewGuid()}.json");
-                scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Model_{Guid.NewGuid()}.scr");
-                seedPath = CreateConsoleSeedFile(validFiles[0]);
+                configPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_{mode}_{Guid.NewGuid():N}.json");
+                scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_{mode}_{Guid.NewGuid():N}.scr");
+                statusPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_{mode}_{Guid.NewGuid():N}.status.json");
 
-                File.WriteAllText(configPath, config);
-                CreateMergeScript(scriptPath, configPath, outputPath);
+                File.WriteAllText(configPath, CreateMergeConfig(validFiles, layoutNames, outputPath, mode, statusPath));
+                CreateMergeScript(scriptPath, configPath);
 
-                return await RunAcCoreConsoleAsync(scriptPath, seedPath, outputPath, 300000, cancellationToken);
+                progress?.Report(new MergeProgressInfo
+                {
+                    Phase = "Merging",
+                    CurrentItem = $"Starting {mode} merge...",
+                    Current = 0,
+                    Total = validFiles.Count
+                });
+
+                var inputPath = string.IsNullOrWhiteSpace(inputOverride) ? validFiles[0] : inputOverride;
+                var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, 300000, cancellationToken);
+                LastLogPath = LastLogPath ?? GetLatestMergeLogPath();
+                return success;
+            }
+            catch (OperationCanceledException)
+            {
+                LastError = "Merge cancelled.";
+                Trace.WriteLine("[Merge] Cancelled");
+                return false;
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Merge] ModelSpace error: {ex.Message}");
+                LastError = ex.Message;
+                Trace.WriteLine($"[Merge] {mode} error: {ex}");
                 return false;
             }
             finally
             {
                 TryDeleteTempFile(configPath);
                 TryDeleteTempFile(scriptPath);
-                TryDeleteTempFile(seedPath);
+                TryDeleteTempFile(statusPath);
             }
         }
 
-private string CreateMergeConfig(List<string> dwgFiles, List<string> layoutNames, string outputPath, string mode)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("{");
-        sb.AppendLine($" \"Mode\": \"{mode}\",");
-        sb.AppendLine($" \"OutputPath\": \"{outputPath.Replace("\\", "\\\\")}\",");
-        sb.AppendLine($" \"VerticalAlign\": \"{_verticalAlign}\",");
-        sb.AppendLine($" \"DwgVersion\": \"{_dwgVersion}\",");
-        sb.AppendLine(" \"SourceFiles\": [");
-
-        for (int i = 0; i < dwgFiles.Count; i++)
+        private string CreateMergeConfig(List<string> dwgFiles, List<string> layoutNames, string outputPath, string mode, string statusPath)
         {
-            var comma = i < dwgFiles.Count - 1 ? "," : "";
-            sb.AppendLine($" {{ \"Path\": \"{dwgFiles[i].Replace("\\", "\\\\")}\", \"Layout\": \"{(layoutNames != null && i < layoutNames.Count ? layoutNames[i] : $"Layout{i + 1}")}\" }}{comma}");
+            var sheetSetIndexPath = Path.Combine(
+                Path.GetDirectoryName(outputPath) ?? "",
+                Path.GetFileNameWithoutExtension(outputPath) + "_SheetSetIndex.json");
+
+            var config = new MergeConfigDto
+            {
+                Mode = mode,
+                OutputPath = outputPath,
+                VerticalAlign = _verticalAlign,
+                DwgVersion = _dwgVersion,
+                ExpectedSheetCount = _expectedSheetCount > 0 ? _expectedSheetCount : dwgFiles.Count,
+                VerifyAfterSave = _verifyAfterSave,
+                SheetSetEnabled = _sheetSetEnabled,
+                SheetSetIndexPath = sheetSetIndexPath,
+                RasterImageMode = _rasterImageMode,
+                StatusPath = statusPath,
+                SourceFiles = new List<SourceFileDto>()
+            };
+
+            for (int i = 0; i < dwgFiles.Count; i++)
+            {
+                config.SourceFiles.Add(new SourceFileDto
+                {
+                    Path = dwgFiles[i],
+                    Layout = layoutNames != null && i < layoutNames.Count && !string.IsNullOrWhiteSpace(layoutNames[i])
+                        ? layoutNames[i]
+                        : $"Layout{i + 1}"
+                });
+            }
+
+            return JsonConvert.SerializeObject(config, Formatting.Indented);
         }
 
-sb.AppendLine(" ]");
-        sb.AppendLine("}");
-        return sb.ToString();
-    }
+        private void CreateMergeScript(string scriptPath, string configPath)
+        {
+            var silentConfigPath = Path.Combine(Path.GetTempPath(), "Licorp_MergeSheets_Config.json");
+            File.Copy(configPath, silentConfigPath, true);
 
-private void CreateMergeScript(string scriptPath, string configPath, string outputPath)
-    {
-        var sb = new StringBuilder();
+            var lines = new List<string>
+            {
+                "_SECURELOAD",
+                "0",
+                "NETLOAD",
+                $"\"{_pluginPath}\"",
+                "_LICORP_MERGESHEETS",
+                "QUIT",
+                "Y"
+            };
 
-        var silentConfigPath = Path.Combine(Path.GetTempPath(), "Licorp_MergeSheets_Config.json");
-        File.Copy(configPath, silentConfigPath, true);
-
-        sb.AppendLine("_SECURELOAD");
-        sb.AppendLine("0");
-        sb.AppendLine("NETLOAD");
-        sb.AppendLine($"\"{_pluginPath}\"");
-        sb.AppendLine("_LICORP_MERGESHEETS");
-
-        sb.AppendLine("QUIT");
-        sb.AppendLine("Y");
-        File.WriteAllText(scriptPath, sb.ToString());
-    }
+            File.WriteAllLines(scriptPath, lines);
+        }
 
         private string CreateConsoleSeedFile(string sourcePath)
         {
-            var seedPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_ModelSeed_{Guid.NewGuid()}.dwg");
+            var seedPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_ModelSeed_{Guid.NewGuid():N}.dwg");
             CopyFileShared(sourcePath, seedPath);
             Trace.WriteLine($"[Merge] ModelSpace seed DWG: {seedPath}");
             return seedPath;
@@ -288,6 +299,273 @@ private void CreateMergeScript(string scriptPath, string configPath, string outp
             {
                 source.CopyTo(dest);
             }
+        }
+
+        private async Task<bool> RunMergeEngineAsync(
+            string scriptPath,
+            string inputPath,
+            string outputPath,
+            string statusPath,
+            int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            if (_mergeEngine == MergeEngine.FullAutoCAD)
+            {
+                if (string.IsNullOrWhiteSpace(_acadPath))
+                {
+                    LastError = "Full AutoCAD engine was selected, but acad.exe was not found.";
+                    return false;
+                }
+
+                return await RunFullAutoCADInternalAsync(scriptPath, inputPath, outputPath, statusPath, timeoutMs * 2, cancellationToken);
+            }
+
+            if (!string.IsNullOrWhiteSpace(_accoreconsolePath))
+            {
+                _lastRunReturnedPluginStatus = false;
+                var coreSuccess = await RunAcCoreConsoleInternalAsync(scriptPath, inputPath, outputPath, statusPath, timeoutMs, cancellationToken);
+                if (coreSuccess)
+                    return true;
+
+                if (_lastRunReturnedPluginStatus)
+                {
+                    Trace.WriteLine("[Merge] AcCoreConsole plugin completed and returned failure status; not retrying in Full AutoCAD.");
+                    return false;
+                }
+
+                Trace.WriteLine("[Merge] AcCoreConsole failed; trying Full AutoCAD fallback when available.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(_acadPath))
+                return await RunFullAutoCADInternalAsync(scriptPath, inputPath, outputPath, statusPath, timeoutMs * 2, cancellationToken);
+
+            LastError = LastError ?? "AcCoreConsole failed and Full AutoCAD fallback is not available.";
+            return false;
+        }
+
+        private async Task<bool> RunAcCoreConsoleInternalAsync(
+            string scriptPath,
+            string inputPath,
+            string outputPath,
+            string statusPath,
+            int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            if (!File.Exists(inputPath))
+            {
+                LastError = $"Input file not found: {inputPath}";
+                return false;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = _accoreconsolePath,
+                Arguments = $"/i \"{inputPath}\" /s \"{scriptPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            return await RunProcessAndEvaluateAsync("AcCoreConsole", startInfo, outputPath, statusPath, timeoutMs, cancellationToken);
+        }
+
+        private async Task<bool> RunFullAutoCADInternalAsync(
+            string scriptPath,
+            string inputPath,
+            string outputPath,
+            string statusPath,
+            int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            if (!File.Exists(inputPath))
+            {
+                LastError = $"Input file not found: {inputPath}";
+                return false;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = _acadPath,
+                Arguments = $"/nologo \"{inputPath}\" /b \"{scriptPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = false,
+                WindowStyle = ProcessWindowStyle.Minimized,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            return await RunProcessAndEvaluateAsync("Full AutoCAD", startInfo, outputPath, statusPath, timeoutMs, cancellationToken);
+        }
+
+        private async Task<bool> RunProcessAndEvaluateAsync(
+            string engineName,
+            ProcessStartInfo startInfo,
+            string outputPath,
+            string statusPath,
+            int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                Trace.WriteLine($"[Merge] Running {engineName}: {startInfo.FileName} {startInfo.Arguments}");
+
+                using (var process = Process.Start(startInfo))
+                {
+                    if (process == null)
+                    {
+                        LastError = $"{engineName} did not start.";
+                        return false;
+                    }
+
+                    var outputTask = process.StandardOutput.ReadToEndAsync();
+                    var errorTask = process.StandardError.ReadToEndAsync();
+                    var completed = await Task.Run(() => process.WaitForExit(timeoutMs), cancellationToken);
+
+                    if (!completed)
+                    {
+                        try { process.Kill(); } catch { }
+                        LastError = $"{engineName} timed out after {timeoutMs / 1000} seconds.";
+                        return false;
+                    }
+
+                    var output = await outputTask;
+                    var errors = await errorTask;
+
+                    Trace.WriteLine($"[Merge] {engineName} exit code: {process.ExitCode}");
+                    if (!string.IsNullOrWhiteSpace(output))
+                        Trace.WriteLine($"[Merge] {engineName} output: {TrimForTrace(output)}");
+                    if (!string.IsNullOrWhiteSpace(errors))
+                        Trace.WriteLine($"[Merge] {engineName} errors: {TrimForTrace(errors)}");
+
+                    if (process.ExitCode != 0)
+                    {
+                        LastError = $"{engineName} exited with code {process.ExitCode}.";
+                        return false;
+                    }
+                }
+
+                return EvaluateStatusFile(engineName, outputPath, statusPath);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                LastError = $"{engineName} error: {ex.Message}";
+                Trace.WriteLine($"[Merge] {LastError}");
+                return false;
+            }
+        }
+
+        private bool EvaluateStatusFile(string engineName, string outputPath, string statusPath)
+        {
+            var status = ReadStatus(statusPath);
+            if (status != null)
+            {
+                _lastRunReturnedPluginStatus = true;
+                LastLogPath = status.LogPath;
+                LastError = status.Success ? null : status.Message;
+
+                if (!status.Success)
+                    return false;
+
+                if (!IsUsableOutput(outputPath))
+                {
+                    LastError = $"{engineName} reported success, but output DWG is missing or too small.";
+                    return false;
+                }
+
+                return true;
+            }
+
+            LastLogPath = GetLatestMergeLogPath();
+            if (IsUsableOutput(outputPath))
+            {
+                Trace.WriteLine($"[Merge] Status file missing, but output DWG exists: {outputPath}");
+                return true;
+            }
+
+            LastError = $"{engineName} finished but did not produce a valid combined DWG.";
+            return false;
+        }
+
+        private MergeStatusDto ReadStatus(string statusPath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(statusPath) || !File.Exists(statusPath))
+                    return null;
+
+                var status = JsonConvert.DeserializeObject<MergeStatusDto>(File.ReadAllText(statusPath));
+                return status;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Merge] Failed to read status file: {ex.Message}");
+                return null;
+            }
+        }
+
+        private bool IsUsableOutput(string outputPath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(outputPath) || !File.Exists(outputPath))
+                    return false;
+
+                return new FileInfo(outputPath).Length > 4096;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private string GetLatestMergeLogPath()
+        {
+            try
+            {
+                var logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Licorp_MergeSheets",
+                    "Logs");
+
+                if (!Directory.Exists(logDir))
+                    return null;
+
+                return Directory.GetFiles(logDir, "MergeLog_*.log")
+                    .Select(p => new FileInfo(p))
+                    .OrderByDescending(f => f.LastWriteTimeUtc)
+                    .FirstOrDefault()
+                    ?.FullName;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private string GetPluginSubFolder(string enginePath)
+        {
+            if (!string.IsNullOrEmpty(enginePath))
+            {
+                var lower = enginePath.ToLowerInvariant();
+                if (lower.Contains("2025") || lower.Contains("2026") || lower.Contains("2027"))
+                    return "2025";
+            }
+
+            return "2024";
+        }
+
+        private string TrimForTrace(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "";
+
+            value = value.Trim();
+            return value.Length <= 4000 ? value : value.Substring(value.Length - 4000);
         }
 
         private void TryDeleteTempFile(string path)
@@ -305,91 +583,36 @@ private void CreateMergeScript(string scriptPath, string configPath, string outp
             }
         }
 
-        private async Task<bool> RunAcCoreConsoleAsync(string scriptPath, string inputPath, string outputPath, int timeoutMs, CancellationToken cancellationToken)
+        private class MergeConfigDto
         {
-            try
-            {
-if (!string.IsNullOrEmpty(_accoreconsolePath))
-            {
-                return await RunAcCoreConsoleInternalAsync(scriptPath, inputPath, outputPath, timeoutMs, cancellationToken);
-            }
-
-            Trace.WriteLine("[Merge] AcCoreConsole not available");
-            return false;
-            }
-            catch (OperationCanceledException)
-            {
-                Trace.WriteLine("[Merge] Cancelled");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Merge] Error: {ex.Message}");
-                return false;
-            }
+            public string Mode { get; set; }
+            public string OutputPath { get; set; }
+            public string VerticalAlign { get; set; }
+            public string DwgVersion { get; set; }
+            public int ExpectedSheetCount { get; set; }
+            public bool VerifyAfterSave { get; set; }
+            public bool SheetSetEnabled { get; set; }
+            public string SheetSetIndexPath { get; set; }
+            public string RasterImageMode { get; set; }
+            public string StatusPath { get; set; }
+            public List<SourceFileDto> SourceFiles { get; set; }
         }
 
-        private async Task<bool> RunAcCoreConsoleInternalAsync(string scriptPath, string inputPath, string outputPath, int timeoutMs, CancellationToken cancellationToken)
+        private class SourceFileDto
         {
-            try
-            {
-                if (!File.Exists(inputPath))
-                {
-                    Trace.WriteLine($"[Merge] Input file not found: {inputPath}");
-                    return false;
-                }
+            public string Path { get; set; }
+            public string Layout { get; set; }
+        }
 
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = _accoreconsolePath,
-                    Arguments = $"/i \"{inputPath}\" /s \"{scriptPath}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
+        private class MergeStatusDto
+        {
+            public bool Success { get; set; }
+            public string Message { get; set; }
+            public string LogPath { get; set; }
+        }
+    }
 
-                using (var process = Process.Start(startInfo))
-                {
-                    if (process == null)
-                        return false;
-
-                    var outputTask = process.StandardOutput.ReadToEndAsync();
-                    var errorTask = process.StandardError.ReadToEndAsync();
-
-                    var completed = await Task.Run(() => process.WaitForExit(timeoutMs), cancellationToken);
-
-                    if (!completed)
-                    {
-                        try { process.Kill(); } catch { }
-                        return false;
-                    }
-
-                    string output = await outputTask;
-                    string errors = await errorTask;
-
-                    Trace.WriteLine($"[Merge] AcCoreConsole exit code: {process.ExitCode}");
-                    if (!string.IsNullOrEmpty(errors))
-                        Trace.WriteLine($"[Merge] Errors: {errors}");
-
-                    if (process.ExitCode == 0 && File.Exists(outputPath))
-                        return true;
-
-                    if (!File.Exists(outputPath))
-                        Trace.WriteLine($"[Merge] Output file not found: {outputPath}");
-
-                    return false;
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Merge] Console error: {ex.Message}");
-                return false;
-            }
-}
-}
-
-public class MergeProgressInfo
+    public class MergeProgressInfo
     {
         public string Phase { get; set; }
         public string CurrentItem { get; set; }

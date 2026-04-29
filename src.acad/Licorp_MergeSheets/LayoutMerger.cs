@@ -5,6 +5,7 @@ using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using System.Diagnostics;
+using Newtonsoft.Json;
 
 namespace Licorp_MergeSheets
 {
@@ -722,6 +723,208 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                 AcadLogger.Log($"[LayoutMerger] ModelSpace error: {ex.Message}");
                 AcadLogger.Log($"[LayoutMerger] ModelSpace stack: {ex.StackTrace}");
                 return false;
+            }
+        }
+
+        public bool VerifyCombinedFile(MergeConfig config, out string message)
+        {
+            message = null;
+
+            try
+            {
+                if (config == null)
+                {
+                    message = "Verification failed: merge config is null.";
+                    AcadLogger.LogError(message);
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(config.OutputPath) || !File.Exists(config.OutputPath))
+                {
+                    message = $"Verification failed: output DWG not found: {config.OutputPath}";
+                    AcadLogger.LogError(message);
+                    return false;
+                }
+
+                var fileInfo = new FileInfo(config.OutputPath);
+                if (fileInfo.Length < 4096)
+                {
+                    message = $"Verification failed: output DWG is too small ({fileInfo.Length} bytes).";
+                    AcadLogger.LogError(message);
+                    return false;
+                }
+
+                int expected = config.ExpectedSheetCount > 0
+                    ? config.ExpectedSheetCount
+                    : (config.SourceFiles?.Count ?? 0);
+
+                var db = new Database(false, true);
+                using (db)
+                {
+                    db.ReadDwgFile(config.OutputPath, FileShare.ReadWrite, true, "");
+                    db.CloseInput(true);
+
+                    using (var tr = db.TransactionManager.StartTransaction())
+                    {
+                        if (string.Equals(config.Mode, "MultiLayout", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var layoutStats = InspectPaperLayouts(db, tr);
+                            var contentLayouts = layoutStats
+                                .Where(s => s.ContentEntityCount > 0)
+                                .ToList();
+                            var emptyNonDefaultLayouts = layoutStats
+                                .Where(s => s.ContentEntityCount == 0 && !IsDefaultLayoutName(s.Name))
+                                .Select(s => s.Name)
+                                .ToList();
+                            var emptyDefaultLayouts = layoutStats
+                                .Where(s => s.ContentEntityCount == 0 && IsDefaultLayoutName(s.Name))
+                                .Select(s => s.Name)
+                                .ToList();
+
+                            AcadLogger.LogInfo(
+                                $"VERIFY MultiLayout: layouts={layoutStats.Count}, contentLayouts={contentLayouts.Count}, " +
+                                $"emptyDefaultLayouts={emptyDefaultLayouts.Count}, expected={expected}");
+
+                            foreach (var stat in layoutStats)
+                            {
+                                AcadLogger.LogInfo(
+                                    $"VERIFY layout '{stat.Name}': entities={stat.EntityCount}, contentEntities={stat.ContentEntityCount}, " +
+                                    $"backgroundEntities={stat.BackgroundEntityCount}, viewportEntities={stat.ViewportEntityCount}");
+                            }
+
+                            if (emptyDefaultLayouts.Count > 0)
+                                AcadLogger.LogWarning("VERIFY ignored empty default layout(s): " + string.Join(", ", emptyDefaultLayouts));
+
+                            if (expected > 0 && contentLayouts.Count < expected)
+                            {
+                                message = $"Verification failed: expected {expected} content layout(s), found {contentLayouts.Count}.";
+                                AcadLogger.LogError(message);
+                                return false;
+                            }
+
+                            if (emptyNonDefaultLayouts.Count > 0)
+                            {
+                                message = "Verification failed: empty non-default layout(s): " + string.Join(", ", emptyNonDefaultLayouts);
+                                AcadLogger.LogError(message);
+                                return false;
+                            }
+                        }
+                        else
+                        {
+                            var modelStats = GetModelSpaceStats(db, tr);
+                            LogModelSpaceStats($"VERIFY {config.Mode}", modelStats);
+
+                            if (modelStats.EntityCount == 0 || modelStats.ExtentsEntityCount == 0)
+                            {
+                                message = $"Verification failed: {config.Mode} ModelSpace has no usable entities.";
+                                AcadLogger.LogError(message);
+                                return false;
+                            }
+
+                            if (string.Equals(config.Mode, "ModelSpace", StringComparison.OrdinalIgnoreCase))
+                            {
+                                int backgroundCount = CountModelSpaceBackgrounds(db, tr);
+                                AcadLogger.LogInfo($"VERIFY ModelSpace: sheetBackgrounds={backgroundCount}, expected={expected}");
+
+                                if (expected > 0 && backgroundCount < expected)
+                                {
+                                    message = $"Verification failed: expected {expected} model-space sheet region(s), found {backgroundCount}.";
+                                    AcadLogger.LogError(message);
+                                    return false;
+                                }
+                            }
+                        }
+
+                        tr.Commit();
+                    }
+                }
+
+                message = "Verification passed.";
+                AcadLogger.LogInfo(message);
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                message = "Verification failed: " + ex.Message;
+                AcadLogger.LogError(message);
+                AcadLogger.LogError("Verification stack: " + ex.StackTrace);
+                return false;
+            }
+        }
+
+        public void CreateSheetSetIndex(MergeConfig config)
+        {
+            try
+            {
+                if (config == null || !config.SheetSetEnabled)
+                    return;
+
+                if (string.IsNullOrWhiteSpace(config.SheetSetIndexPath))
+                    return;
+
+                var index = new
+                {
+                    Type = "Licorp Sheet Set Index",
+                    Note = "This is a lightweight sheet-set data file for the combined DWG. AutoCAD DST creation is not attempted when the Sheet Set Manager COM API is unavailable.",
+                    CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    OutputDwg = config.OutputPath,
+                    Mode = config.Mode,
+                    SheetCount = config.SourceFiles?.Count ?? 0,
+                    Sheets = (config.SourceFiles ?? new List<SourceFile>())
+                        .Select((s, i) => new
+                        {
+                            Index = i + 1,
+                            Layout = s.Layout,
+                            SourceDwg = s.Path,
+                            Region = string.Equals(config.Mode, "ModelSpace", StringComparison.OrdinalIgnoreCase)
+                                ? $"ModelSpace sheet region {i + 1}"
+                                : s.Layout
+                        })
+                        .ToList()
+                };
+
+                var folder = Path.GetDirectoryName(config.SheetSetIndexPath);
+                if (!string.IsNullOrWhiteSpace(folder))
+                    Directory.CreateDirectory(folder);
+
+                File.WriteAllText(config.SheetSetIndexPath, JsonConvert.SerializeObject(index, Formatting.Indented));
+                AcadLogger.LogInfo($"Sheet Set index written: {config.SheetSetIndexPath}");
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"Sheet Set index failed: {ex.Message}");
+            }
+        }
+
+        public void HandleRasterImages(MergeConfig config)
+        {
+            try
+            {
+                if (config == null || string.IsNullOrWhiteSpace(config.OutputPath) || !File.Exists(config.OutputPath))
+                    return;
+
+                var rasterInfos = ScanRasterImages(config.OutputPath);
+                AcadLogger.LogInfo($"Raster image scan: mode={config.RasterImageMode}, count={rasterInfos.Count}");
+
+                if (!string.Equals(config.RasterImageMode, "EmbedAsOle", StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                if (rasterInfos.Count == 0)
+                {
+                    AcadLogger.LogInfo("Raster OLE embed requested, but no raster image entities were found.");
+                    return;
+                }
+
+                foreach (var info in rasterInfos)
+                {
+                    AcadLogger.LogWarning(
+                        $"Raster OLE embed fallback: handle={info.Handle}, owner={info.Owner}, layer={info.Layer}. " +
+                        "AutoCAD .NET API did not expose a stable OLE writer in this runtime; keeping raster reference.");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"Raster image handling failed: {ex.Message}");
             }
         }
 
@@ -2709,6 +2912,142 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             }
         }
 
+        private List<LayoutVerifyStats> InspectPaperLayouts(Database db, Transaction tr)
+        {
+            var result = new List<LayoutVerifyStats>();
+            var layouts = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+
+            foreach (DBDictionaryEntry entry in layouts)
+            {
+                try
+                {
+                    var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
+                    if (layout == null || layout.ModelType || layout.BlockTableRecordId.IsNull)
+                        continue;
+
+                    var paperSpace = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+                    var stats = new LayoutVerifyStats { Name = layout.LayoutName };
+
+                    foreach (ObjectId id in paperSpace)
+                    {
+                        try
+                        {
+                            var ent = tr.GetObject(id, OpenMode.ForRead, false) as Entity;
+                            if (ent == null || ent.IsErased)
+                                continue;
+
+                            stats.EntityCount++;
+
+                            if (string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                stats.BackgroundEntityCount++;
+                                continue;
+                            }
+
+                            if (ent is Viewport)
+                            {
+                                stats.ViewportEntityCount++;
+                                continue;
+                            }
+
+                            stats.ContentEntityCount++;
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    result.Add(stats);
+                }
+                catch (System.Exception ex)
+                {
+                    AcadLogger.LogWarning($"VERIFY: failed to inspect layout '{entry.Key}': {ex.Message}");
+                }
+            }
+
+            return result;
+        }
+
+        private bool IsDefaultLayoutName(string layoutName)
+        {
+            return string.Equals(layoutName, "Layout1", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(layoutName, "Layout2", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private int CountModelSpaceBackgrounds(Database db, Transaction tr)
+        {
+            int count = 0;
+            var modelSpace = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+
+            foreach (ObjectId id in modelSpace)
+            {
+                try
+                {
+                    var ent = tr.GetObject(id, OpenMode.ForRead, false) as Entity;
+                    if (ent != null &&
+                        !ent.IsErased &&
+                        string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        count++;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            // Each sheet background is currently created as a boundary polyline plus a solid hatch.
+            return (int)Math.Ceiling(count / 2.0);
+        }
+
+        private List<RasterImageInfo> ScanRasterImages(string dwgPath)
+        {
+            var result = new List<RasterImageInfo>();
+            var db = new Database(false, true);
+
+            using (db)
+            {
+                db.ReadDwgFile(dwgPath, FileShare.ReadWrite, true, "");
+                db.CloseInput(true);
+
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var blockTable = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                    foreach (ObjectId btrId in blockTable)
+                    {
+                        var btr = tr.GetObject(btrId, OpenMode.ForRead, false) as BlockTableRecord;
+                        if (btr == null)
+                            continue;
+
+                        foreach (ObjectId id in btr)
+                        {
+                            try
+                            {
+                                var raster = tr.GetObject(id, OpenMode.ForRead, false) as RasterImage;
+                                if (raster == null || raster.IsErased)
+                                    continue;
+
+                                result.Add(new RasterImageInfo
+                                {
+                                    Handle = raster.Handle.ToString(),
+                                    Layer = raster.Layer,
+                                    Owner = btr.Name
+                                });
+                            }
+                            catch
+                            {
+                            }
+                        }
+                    }
+
+                    tr.Commit();
+                }
+            }
+
+            return result;
+        }
+
         private Extents3d GetExtents(BlockTableRecord btr)
         {
             double minX = double.MaxValue, minY = double.MaxValue;
@@ -2807,6 +3146,22 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             public int EntityCount;
             public int ExtentsEntityCount;
             public Extents3d Extents;
+        }
+
+        private class LayoutVerifyStats
+        {
+            public string Name;
+            public int EntityCount;
+            public int ContentEntityCount;
+            public int BackgroundEntityCount;
+            public int ViewportEntityCount;
+        }
+
+        private class RasterImageInfo
+        {
+            public string Handle;
+            public string Layer;
+            public string Owner;
         }
 
     private class ViewportInfo

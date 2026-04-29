@@ -4,6 +4,7 @@ namespace Licorp_CombineCAD.Models
     {
         SheetNumber,
         Name,
-        Custom
+        Custom,
+        RevitSheetSchedule
     }
 }

@@ -25,6 +25,12 @@ namespace Licorp_CombineCAD.Models
         private bool _openAfterExport = false;
         private bool _smartViewScale = false;
         private bool _progressAlwaysOnTop = true;
+        private string _orderRuleSource = "Sheet Number";
+        private string _selectedSheetScheduleId = "";
+        private bool _createSheetSet = true;
+        private RasterImageMode _rasterImageMode = RasterImageMode.KeepReference;
+        private MergeEngine _mergeEngine = MergeEngine.AcCoreConsole;
+        private bool _verifyCombinedDwg = true;
 
         // ===== Geometry Options =====
         private bool _hideScopeBoxes = true;
@@ -96,6 +102,42 @@ namespace Licorp_CombineCAD.Models
         {
             get => _progressAlwaysOnTop;
             set { _progressAlwaysOnTop = value; OnPropertyChanged(); }
+        }
+
+        public string OrderRuleSource
+        {
+            get => _orderRuleSource;
+            set { _orderRuleSource = value; OnPropertyChanged(); }
+        }
+
+        public string SelectedSheetScheduleId
+        {
+            get => _selectedSheetScheduleId;
+            set { _selectedSheetScheduleId = value; OnPropertyChanged(); }
+        }
+
+        public bool CreateSheetSet
+        {
+            get => _createSheetSet;
+            set { _createSheetSet = value; OnPropertyChanged(); }
+        }
+
+        public RasterImageMode RasterImageMode
+        {
+            get => _rasterImageMode;
+            set { _rasterImageMode = value; OnPropertyChanged(); }
+        }
+
+        public MergeEngine MergeEngine
+        {
+            get => _mergeEngine;
+            set { _mergeEngine = value; OnPropertyChanged(); }
+        }
+
+        public bool VerifyCombinedDwg
+        {
+            get => _verifyCombinedDwg;
+            set { _verifyCombinedDwg = value; OnPropertyChanged(); }
         }
 
         // ===== Geometry Options =====
