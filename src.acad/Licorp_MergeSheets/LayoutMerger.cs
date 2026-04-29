@@ -416,7 +416,7 @@ AcadLogger.LogInfo($"GD2: Cloned {psClonedCount}/{psIds.Count} PaperSpace entiti
 
                     // Cleanup chỉ xóa các layout mặc định trống
                     CleanupDefaultLayouts(outputDb);
-                    ApplyMlabsLikePresentation(outputDb, "MultiLayout");
+                    ApplyPaperBackgroundPresentation(outputDb, "MultiLayout");
                     RegenerateLayouts(outputDb, "MultiLayout");
 
                     // Save
@@ -670,29 +670,25 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
         // ============ HELPER METHODS ============
 
-        private void ApplyMlabsLikePresentation(Database db, string mode)
+        private void ApplyPaperBackgroundPresentation(Database db, string mode)
         {
             try
             {
-                AcadLogger.LogSection($"MLabs-like Presentation ({mode})");
+                AcadLogger.LogSection($"Paper Background ({mode})");
 
                 using (var tr = db.TransactionManager.StartTransaction())
                 {
-                    ObjectId backgroundLayerId = EnsurePaperBackgroundLayer(db, tr);
-                    int normalizedLayers = NormalizeLayerColors(db, tr);
-                    int normalizedEntities = NormalizeEntityColors(db, tr);
-                    int backgroundCount = AddWhitePaperBackgrounds(db, tr, backgroundLayerId);
+                    EnsurePaperBackgroundLayer(db, tr);
+                    int backgroundCount = AddWhitePaperBackgrounds(db, tr);
 
                     tr.Commit();
 
-                    AcadLogger.LogInfo(
-                        $"MLABS STYLE: layersNormalized={normalizedLayers}, " +
-                        $"entitiesNormalized={normalizedEntities}, whiteBackgrounds={backgroundCount}");
+                    AcadLogger.LogInfo($"PAPER BACKGROUND: whiteBackgrounds={backgroundCount}");
                 }
             }
             catch (System.Exception ex)
             {
-                AcadLogger.LogWarning($"MLabs-like presentation failed for {mode}: {ex.Message}");
+                AcadLogger.LogWarning($"Paper background failed for {mode}: {ex.Message}");
             }
         }
 
@@ -712,7 +708,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                 ObjectId layerId = layers.Add(layer);
                 tr.AddNewlyCreatedDBObject(layer, true);
-                AcadLogger.LogInfo($"MLABS STYLE: created layer '{PaperBackgroundLayerName}'");
+                AcadLogger.LogInfo($"PAPER BACKGROUND: created layer '{PaperBackgroundLayerName}'");
                 return layerId;
             }
 
@@ -722,93 +718,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             return existingId;
         }
 
-        private int NormalizeLayerColors(Database db, Transaction tr)
-        {
-            int changed = 0;
-            var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-
-            foreach (ObjectId layerId in layers)
-            {
-                try
-                {
-                    var layer = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForRead);
-                    if (string.Equals(layer.Name, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    var normalized = GetMlabsLikeColor(layer.Color, IsMaskOrBackgroundLayer(layer.Name));
-                    if (AreColorsEquivalent(layer.Color, normalized))
-                        continue;
-
-                    layer.UpgradeOpen();
-                    layer.Color = normalized;
-                    changed++;
-                }
-                catch (System.Exception ex)
-                {
-                    AcadLogger.LogWarning($"MLABS STYLE: layer color normalize failed: {ex.Message}");
-                }
-            }
-
-            return changed;
-        }
-
-        private int NormalizeEntityColors(Database db, Transaction tr)
-        {
-            int changed = 0;
-            var blockTable = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-
-            foreach (ObjectId btrId in blockTable)
-            {
-                BlockTableRecord btr = null;
-
-                try
-                {
-                    btr = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForRead);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                if (btr == null || btr.IsFromExternalReference)
-                    continue;
-
-                foreach (ObjectId entId in btr)
-                {
-                    try
-                    {
-                        var ent = tr.GetObject(entId, OpenMode.ForRead, false) as Entity;
-                        if (ent == null || ent.IsErased || ent is Viewport)
-                            continue;
-
-                        if (string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        if (ent.Color == null ||
-                            ent.Color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByLayer ||
-                            ent.Color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByBlock)
-                            continue;
-
-                        bool preserveLightFill = IsLightFillEntity(ent) || IsMaskOrBackgroundLayer(ent.Layer);
-                        var normalized = GetMlabsLikeColor(ent.Color, preserveLightFill);
-                        if (AreColorsEquivalent(ent.Color, normalized))
-                            continue;
-
-                        ent.UpgradeOpen();
-                        ent.Color = normalized;
-                        changed++;
-                    }
-                    catch (System.Exception ex)
-                    {
-                        AcadLogger.LogWarning($"MLABS STYLE: entity color normalize failed: {ex.Message}");
-                    }
-                }
-            }
-
-            return changed;
-        }
-
-        private int AddWhitePaperBackgrounds(Database db, Transaction tr, ObjectId backgroundLayerId)
+        private int AddWhitePaperBackgrounds(Database db, Transaction tr)
         {
             int added = 0;
             var layouts = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
@@ -833,13 +743,13 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                     added++;
                     AcadLogger.LogInfo(
-                        $"MLABS STYLE: layout '{entry.Key}' white background added, " +
+                        $"PAPER BACKGROUND: layout '{entry.Key}' white background added, " +
                         $"erasedOld={erasedOld}, extentsEntities={extentEntities}, " +
                         $"background={FormatExtents(backgroundExtents)}, drawOrderBottom={drawOrderMoved}");
                 }
                 catch (System.Exception ex)
                 {
-                    AcadLogger.LogWarning($"MLABS STYLE: white background failed for layout '{entry.Key}': {ex.Message}");
+                    AcadLogger.LogWarning($"PAPER BACKGROUND: white background failed for layout '{entry.Key}': {ex.Message}");
                 }
             }
 
@@ -1009,135 +919,9 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             }
             catch (System.Exception ex)
             {
-                AcadLogger.LogWarning($"MLABS STYLE: failed to move paper background to bottom: {ex.Message}");
+                AcadLogger.LogWarning($"PAPER BACKGROUND: failed to move paper background to bottom: {ex.Message}");
                 return false;
             }
-        }
-
-        private Autodesk.AutoCAD.Colors.Color GetMlabsLikeColor(Autodesk.AutoCAD.Colors.Color color, bool preserveLightFill)
-        {
-            if (color == null)
-                return MlabsBlack();
-
-            if (color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByLayer ||
-                color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByBlock)
-                return color;
-
-            short aci = color.ColorIndex;
-            if (aci > 0 && aci <= 255)
-            {
-                if (aci == 3)
-                    return MlabsGreen();
-
-                if (aci == 8 || aci == 9 || aci >= 250)
-                    return color;
-
-                return MlabsBlack();
-            }
-
-            int r, g, b;
-            if (TryGetRgb(color, out r, out g, out b))
-            {
-                if (IsGreenDominant(r, g, b))
-                    return MlabsGreen();
-
-                if (IsNeutralGray(r, g, b))
-                {
-                    int average = (r + g + b) / 3;
-                    if (preserveLightFill && average >= 220)
-                        return color;
-
-                    if (average >= 35 && average <= 220)
-                        return Autodesk.AutoCAD.Colors.Color.FromRgb((byte)average, (byte)average, (byte)average);
-                }
-            }
-
-            return MlabsBlack();
-        }
-
-        private Autodesk.AutoCAD.Colors.Color MlabsBlack()
-        {
-            return Autodesk.AutoCAD.Colors.Color.FromRgb(0, 0, 0);
-        }
-
-        private Autodesk.AutoCAD.Colors.Color MlabsGreen()
-        {
-            return Autodesk.AutoCAD.Colors.Color.FromRgb(0, 180, 0);
-        }
-
-        private bool AreColorsEquivalent(Autodesk.AutoCAD.Colors.Color first, Autodesk.AutoCAD.Colors.Color second)
-        {
-            if (first == null || second == null)
-                return first == second;
-
-            if (first.ColorMethod != second.ColorMethod)
-                return false;
-
-            if (first.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByColor)
-            {
-                int r1, g1, b1, r2, g2, b2;
-                return TryGetRgb(first, out r1, out g1, out b1) &&
-                       TryGetRgb(second, out r2, out g2, out b2) &&
-                       r1 == r2 && g1 == g2 && b1 == b2;
-            }
-
-            return first.ColorIndex == second.ColorIndex;
-        }
-
-        private bool TryGetRgb(Autodesk.AutoCAD.Colors.Color color, out int r, out int g, out int b)
-        {
-            r = 0;
-            g = 0;
-            b = 0;
-
-            try
-            {
-                r = color.Red;
-                g = color.Green;
-                b = color.Blue;
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private bool IsGreenDominant(int r, int g, int b)
-        {
-            return g >= 80 && g >= r + 40 && g >= b + 20;
-        }
-
-        private bool IsNeutralGray(int r, int g, int b)
-        {
-            int max = Math.Max(r, Math.Max(g, b));
-            int min = Math.Min(r, Math.Min(g, b));
-            return max - min <= 25;
-        }
-
-        private bool IsLightFillEntity(Entity ent)
-        {
-            if (ent == null)
-                return false;
-
-            string typeName = ent.GetType().Name;
-            return ent is Hatch ||
-                   ent is Solid ||
-                   typeName.IndexOf("Wipeout", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private bool IsMaskOrBackgroundLayer(string layerName)
-        {
-            if (string.IsNullOrEmpty(layerName))
-                return false;
-
-            string normalized = layerName.ToLowerInvariant();
-            return normalized.Contains("wipeout") ||
-                   normalized.Contains("mask") ||
-                   normalized.Contains("background") ||
-                   normalized.Contains("bg") ||
-                   normalized.Contains("solid") ||
-                   normalized.Contains("fill");
         }
 
         private bool IsUsableExtents(Extents3d extents)
