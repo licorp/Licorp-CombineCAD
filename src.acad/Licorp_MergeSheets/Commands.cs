@@ -73,7 +73,7 @@ namespace Licorp_MergeSheets
                 AcadLogger.LogInfo($"DwgVersion: {config.DwgVersion}");
                 AcadLogger.LogInfo($"ExpectedSheetCount: {config.ExpectedSheetCount}");
                 AcadLogger.LogInfo($"VerifyAfterSave: {config.VerifyAfterSave}");
-                AcadLogger.LogInfo($"SheetSetEnabled: {config.SheetSetEnabled}");
+                AcadLogger.LogInfo($"CombinedDwgIndexEnabled: {config.SheetSetEnabled}");
                 AcadLogger.LogInfo($"RasterImageMode: {config.RasterImageMode}");
 
                 if (config.SourceFiles != null)
@@ -117,7 +117,7 @@ namespace Licorp_MergeSheets
                 if (success)
                 {
                     merger.HandleRasterImages(config);
-                    merger.CreateSheetSetIndex(config);
+                    merger.CreateCombinedDwgIndex(config);
                 }
 
                 if (success)

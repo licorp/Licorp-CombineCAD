@@ -18,8 +18,6 @@ namespace Licorp_CombineCAD.Models
         // ===== DWG Options =====
         private string _dwgExportSetupName = "";
         private string _dwgVersion = "2018";
-        private bool _autoBindXRef = true;
-        private bool _useSharedCoordinates = false;
 
         // ===== Advanced Options (MLabs features) =====
         private bool _openAfterExport = false;
@@ -27,15 +25,8 @@ namespace Licorp_CombineCAD.Models
         private bool _progressAlwaysOnTop = true;
         private string _orderRuleSource = "Sheet Number";
         private string _selectedSheetScheduleId = "";
-        private bool _createSheetSet = true;
-        private RasterImageMode _rasterImageMode = RasterImageMode.KeepReference;
-        private MergeEngine _mergeEngine = MergeEngine.AcCoreConsole;
-        private bool _verifyCombinedDwg = true;
 
         // ===== Geometry Options =====
-        private bool _hideScopeBoxes = true;
-        private bool _hideReferencePlanes = true;
-        private bool _hideUnreferencedViewTags = true;
         private bool _preserveCoincidentLines = false;
 
         private VerticalAlignment _verticalAlign = VerticalAlignment.Top;
@@ -73,18 +64,6 @@ namespace Licorp_CombineCAD.Models
             set { _dwgVersion = value; OnPropertyChanged(); }
         }
 
-        public bool AutoBindXRef
-        {
-            get => _autoBindXRef;
-            set { _autoBindXRef = value; OnPropertyChanged(); }
-        }
-
-        public bool UseSharedCoordinates
-        {
-            get => _useSharedCoordinates;
-            set { _useSharedCoordinates = value; OnPropertyChanged(); }
-        }
-
         // ===== Advanced Options =====
         public bool OpenAfterExport
         {
@@ -116,60 +95,11 @@ namespace Licorp_CombineCAD.Models
             set { _selectedSheetScheduleId = value; OnPropertyChanged(); }
         }
 
-        public bool CreateSheetSet
-        {
-            get => _createSheetSet;
-            set { _createSheetSet = value; OnPropertyChanged(); }
-        }
-
-        public RasterImageMode RasterImageMode
-        {
-            get => _rasterImageMode;
-            set { _rasterImageMode = value; OnPropertyChanged(); }
-        }
-
-        public MergeEngine MergeEngine
-        {
-            get => _mergeEngine;
-            set { _mergeEngine = value; OnPropertyChanged(); }
-        }
-
-        public bool VerifyCombinedDwg
-        {
-            get => _verifyCombinedDwg;
-            set { _verifyCombinedDwg = value; OnPropertyChanged(); }
-        }
-
         // ===== Geometry Options =====
-        public bool HideScopeBoxes
-        {
-            get => _hideScopeBoxes;
-            set { _hideScopeBoxes = value; OnPropertyChanged(); }
-        }
-
-        public bool HideReferencePlanes
-        {
-            get => _hideReferencePlanes;
-            set { _hideReferencePlanes = value; OnPropertyChanged(); }
-        }
-
-        public bool HideUnreferencedViewTags
-        {
-            get => _hideUnreferencedViewTags;
-            set { _hideUnreferencedViewTags = value; OnPropertyChanged(); }
-        }
-
         public bool PreserveCoincidentLines
         {
             get => _preserveCoincidentLines;
             set { _preserveCoincidentLines = value; OnPropertyChanged(); }
-        }
-
-        private bool _createSubfolders = false;
-        public bool CreateSubfolders
-        {
-            get => _createSubfolders;
-            set { _createSubfolders = value; OnPropertyChanged(); }
         }
 
         public VerticalAlignment VerticalAlign

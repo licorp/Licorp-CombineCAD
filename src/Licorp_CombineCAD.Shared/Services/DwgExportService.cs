@@ -136,7 +136,7 @@ namespace Licorp_CombineCAD.Services
         {
             TrySetProperty(options, "ExportingAreas", false);
             // Revit exports sheet views as XREF DWGs when MergedViews is false.
-            // Auto-bind means each sheet should become one self-contained DWG.
+            // Combined output requires each sheet export to be self-contained.
             var mergedViews = true;
             TrySetProperty(options, "MergedViews", mergedViews);
             Trace.WriteLine($"[DwgExport] MergedViews = {mergedViews} (self-contained sheet DWG for AutoCAD merge)");
@@ -192,11 +192,6 @@ namespace Licorp_CombineCAD.Services
             }
 
             EnsureOutputFolder(settings.OutputFolder);
-
-            if (settings.AutoBindXRef)
-            {
-                Trace.WriteLine("[DwgExport] AutoBindXRef enabled: using MergedViews=true; linked models remain loaded for complete sheet export.");
-            }
 
             try
             {

@@ -141,6 +141,14 @@
             <Setter Property="Foreground" Value="#A0A0A0"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
+
+        <Style x:Key="VersionBadge" TargetType="Border">
+            <Setter Property="Background" Value="#16324A"/>
+            <Setter Property="BorderBrush" Value="#2D7DD2"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="16"/>
+            <Setter Property="Padding" Value="12,6"/>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="16">
@@ -341,11 +349,24 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBox Text="{Binding OutputFolder}"
-                                 Style="{StaticResource ModernTextBox}"
-                                 IsReadOnly="True"
-                                 Margin="0,0,8,0"/>
+                                  Style="{StaticResource ModernTextBox}"
+                                  IsReadOnly="True"
+                                  Margin="0,0,8,0"/>
                         <Button Grid.Column="1" Content="Browse" Command="{Binding BrowseFolderCommand}" Style="{StaticResource SecondaryButton}"/>
                     </Grid>
+                    <TextBlock Text="{Binding OutputFolderHint}" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+
+                    <Border Background="#20262D"
+                            BorderBrush="#2D7DD2"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="10,8"
+                            Margin="0,8,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Project DWG folder" Foreground="#7FC1FF" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding ResolvedOutputFolder}" Style="{StaticResource MutedText}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
 
                     <Grid Margin="0,8,0,0">
                         <Grid.ColumnDefinitions>
@@ -382,24 +403,11 @@
                               Style="{StaticResource ModernComboBox}"
                               Margin="0,8,0,0"/>
 
-                    <TextBlock Text="Advanced Reliability" Style="{StaticResource SectionHeader}"/>
-                    <ComboBox ItemsSource="{Binding AvailableMergeEngines}"
-                              SelectedItem="{Binding SelectedMergeEngine}"
-                              Style="{StaticResource ModernComboBox}"/>
-                    <CheckBox Content="Verify combined DWG after save" IsChecked="{Binding VerifyCombinedDwg}" Style="{StaticResource ModernCheckBox}"/>
-                    <CheckBox Content="Create Sheet Set index" IsChecked="{Binding CreateSheetSet}" Style="{StaticResource ModernCheckBox}"/>
-                    <ComboBox ItemsSource="{Binding AvailableRasterImageModes}"
-                              SelectedItem="{Binding SelectedRasterImageMode}"
-                              Style="{StaticResource ModernComboBox}"
-                              Margin="0,6,0,0"/>
-
                     <TextBlock Text="Options" Style="{StaticResource SectionHeader}"/>
-                    <CheckBox Content="Auto-Bind XRefs" IsChecked="{Binding AutoBindXRef}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Smart View Scale" IsChecked="{Binding SmartViewScale}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Open after export" IsChecked="{Binding OpenAfterExport}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Progress always on top" IsChecked="{Binding ProgressAlwaysOnTop}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Preserve coincident lines" IsChecked="{Binding PreserveCoincidentLines}" Style="{StaticResource ModernCheckBox}"/>
-                    <CheckBox Content="Create subfolders per sheet" IsChecked="{Binding CreateSubfolders}" Style="{StaticResource ModernCheckBox}"/>
 
                     <Border Background="#2D2D30"
                             BorderBrush="#3E3E3E"
@@ -441,10 +449,26 @@
             </ScrollViewer>
         </Grid>
 
-        <TextBlock Grid.Row="2"
-                   Text="{Binding StatusMessage}"
-                   Foreground="#A0A0A0"
-                   TextTrimming="CharacterEllipsis"
-                   Margin="0,12,0,0"/>
+        <Grid Grid.Row="2" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0"
+                       Text="{Binding StatusMessage}"
+                       Foreground="#A0A0A0"
+                       TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center"/>
+
+            <Border Grid.Column="1"
+                    Style="{StaticResource VersionBadge}"
+                    HorizontalAlignment="Right">
+                <TextBlock Text="{Binding AppVersionText}"
+                           Foreground="#EAF4FF"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"/>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

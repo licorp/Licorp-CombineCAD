@@ -90,7 +90,7 @@ namespace Licorp_CombineCAD.Services
         }
 
         /// <summary>
-        /// Find acad.exe (full AutoCAD) — fallback for bind operations
+        /// Find acad.exe (full AutoCAD) for automatic merge fallback.
         /// </summary>
         public static string FindAutoCAD(string preferredVersion = null)
         {

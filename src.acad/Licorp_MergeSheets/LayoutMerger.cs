@@ -852,7 +852,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             }
         }
 
-        public void CreateSheetSetIndex(MergeConfig config)
+        public void CreateCombinedDwgIndex(MergeConfig config)
         {
             try
             {
@@ -864,8 +864,8 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                 var index = new
                 {
-                    Type = "Licorp Sheet Set Index",
-                    Note = "This is a lightweight sheet-set data file for the combined DWG. AutoCAD DST creation is not attempted when the Sheet Set Manager COM API is unavailable.",
+                    Type = "Licorp Combined DWG Index",
+                    Note = "This is a lightweight JSON index for the combined DWG layouts. It is not an AutoCAD Sheet Set Manager DST file.",
                     CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                     OutputDwg = config.OutputPath,
                     Mode = config.Mode,
@@ -888,11 +888,11 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                     Directory.CreateDirectory(folder);
 
                 File.WriteAllText(config.SheetSetIndexPath, JsonConvert.SerializeObject(index, Formatting.Indented));
-                AcadLogger.LogInfo($"Sheet Set index written: {config.SheetSetIndexPath}");
+                AcadLogger.LogInfo($"Combined DWG index written: {config.SheetSetIndexPath}");
             }
             catch (System.Exception ex)
             {
-                AcadLogger.LogWarning($"Sheet Set index failed: {ex.Message}");
+                AcadLogger.LogWarning($"Combined DWG index failed: {ex.Message}");
             }
         }
 

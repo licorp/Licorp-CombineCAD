@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Licorp_CombineCAD.Models;
 using Newtonsoft.Json;
 
 namespace Licorp_CombineCAD.Services
@@ -19,24 +18,19 @@ namespace Licorp_CombineCAD.Services
         private readonly string _accoreconsolePath;
         private readonly string _acadPath;
         private readonly string _pluginPath;
-        private readonly MergeEngine _mergeEngine;
 
         private string _verticalAlign = "Top";
         private string _dwgVersion = "Current";
-        private bool _verifyAfterSave = true;
-        private bool _sheetSetEnabled = true;
-        private string _rasterImageMode = "KeepReference";
+        private readonly MergeReliabilityOptions _reliability = new MergeReliabilityOptions();
         private int _expectedSheetCount;
         private bool _lastRunReturnedPluginStatus;
 
         public DwgMergeService(
             string accoreconsolePath = null,
-            MergeEngine mergeEngine = MergeEngine.AcCoreConsole,
             string acadPath = null)
         {
             _accoreconsolePath = accoreconsolePath ?? AutoCadLocatorService.FindAcCoreConsole();
             _acadPath = acadPath ?? AutoCadLocatorService.FindAutoCAD();
-            _mergeEngine = mergeEngine;
 
             var pluginDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -64,11 +58,8 @@ namespace Licorp_CombineCAD.Services
             _verticalAlign = alignment ?? "Top";
         }
 
-        public void SetReliabilityOptions(bool verifyAfterSave, bool sheetSetEnabled, string rasterImageMode, int expectedSheetCount)
+        public void SetExpectedSheetCount(int expectedSheetCount)
         {
-            _verifyAfterSave = verifyAfterSave;
-            _sheetSetEnabled = sheetSetEnabled;
-            _rasterImageMode = string.IsNullOrWhiteSpace(rasterImageMode) ? "KeepReference" : rasterImageMode;
             _expectedSheetCount = Math.Max(0, expectedSheetCount);
         }
 
@@ -243,10 +234,10 @@ namespace Licorp_CombineCAD.Services
                 VerticalAlign = _verticalAlign,
                 DwgVersion = _dwgVersion,
                 ExpectedSheetCount = _expectedSheetCount > 0 ? _expectedSheetCount : dwgFiles.Count,
-                VerifyAfterSave = _verifyAfterSave,
-                SheetSetEnabled = _sheetSetEnabled,
+                VerifyAfterSave = _reliability.VerifyAfterSave,
+                SheetSetEnabled = _reliability.SheetSetEnabled,
                 SheetSetIndexPath = sheetSetIndexPath,
-                RasterImageMode = _rasterImageMode,
+                RasterImageMode = _reliability.RasterImageMode,
                 StatusPath = statusPath,
                 SourceFiles = new List<SourceFileDto>()
             };
@@ -309,17 +300,6 @@ namespace Licorp_CombineCAD.Services
             int timeoutMs,
             CancellationToken cancellationToken)
         {
-            if (_mergeEngine == MergeEngine.FullAutoCAD)
-            {
-                if (string.IsNullOrWhiteSpace(_acadPath))
-                {
-                    LastError = "Full AutoCAD engine was selected, but acad.exe was not found.";
-                    return false;
-                }
-
-                return await RunFullAutoCADInternalAsync(scriptPath, inputPath, outputPath, statusPath, timeoutMs * 2, cancellationToken);
-            }
-
             if (!string.IsNullOrWhiteSpace(_accoreconsolePath))
             {
                 _lastRunReturnedPluginStatus = false;
@@ -609,6 +589,13 @@ namespace Licorp_CombineCAD.Services
             public bool Success { get; set; }
             public string Message { get; set; }
             public string LogPath { get; set; }
+        }
+
+        private class MergeReliabilityOptions
+        {
+            public bool VerifyAfterSave { get; set; } = true;
+            public bool SheetSetEnabled { get; set; } = true;
+            public string RasterImageMode { get; set; } = "KeepReference";
         }
     }
 

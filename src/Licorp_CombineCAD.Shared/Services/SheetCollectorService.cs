@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Autodesk.Revit.DB;
 using Licorp_CombineCAD.Models;
 
@@ -142,9 +143,15 @@ namespace Licorp_CombineCAD.Services
             {
                 var sizeParam = titleBlock.LookupParameter("Sheet Size")
                     ?? titleBlock.LookupParameter("Paper Size");
-                info.PaperSize = sizeParam?.AsString() ?? "";
-                if (string.IsNullOrWhiteSpace(info.PaperSize))
-                    info.PaperSize = DetectPaperSize(titleBlock);
+                var paperSize = NormalizePaperSize(sizeParam?.AsString());
+
+                if (string.IsNullOrWhiteSpace(paperSize))
+                    paperSize = NormalizePaperSize(BuildTitleBlockDescriptor(titleBlock));
+
+                if (string.IsNullOrWhiteSpace(paperSize))
+                    paperSize = DetectPaperSize(titleBlock);
+
+                info.PaperSize = paperSize;
             }
             catch
             {
@@ -204,6 +211,61 @@ namespace Licorp_CombineCAD.Services
             {
                 return "";
             }
+        }
+
+        private static string BuildTitleBlockDescriptor(Element titleBlock)
+        {
+            if (titleBlock == null)
+                return "";
+
+            try
+            {
+                var familyInstance = titleBlock as FamilyInstance;
+                var symbolName = familyInstance?.Symbol?.Name ?? "";
+                var familyName = familyInstance?.Symbol?.FamilyName ?? "";
+
+                return string.Join(" ", new[] { titleBlock.Name ?? "", symbolName, familyName }
+                    .Where(value => !string.IsNullOrWhiteSpace(value)));
+            }
+            catch
+            {
+                return titleBlock.Name ?? "";
+            }
+        }
+
+        private static string NormalizePaperSize(string rawValue)
+        {
+            if (string.IsNullOrWhiteSpace(rawValue))
+                return "";
+
+            var normalized = rawValue.Trim().ToUpperInvariant();
+            var isoMatch = Regex.Match(normalized, @"\bA([0-4])\b", RegexOptions.CultureInvariant);
+            if (isoMatch.Success)
+                return "A" + isoMatch.Groups[1].Value;
+
+            var mmMatch = Regex.Match(normalized, @"(?<width>\d{2,4}(?:[.,]\d+)?)\s*[Xx]\s*(?<height>\d{2,4}(?:[.,]\d+)?)");
+            if (mmMatch.Success &&
+                TryParseMillimeter(mmMatch.Groups["width"].Value, out var widthMm) &&
+                TryParseMillimeter(mmMatch.Groups["height"].Value, out var heightMm))
+            {
+                return ClassifyPaperSize(widthMm, heightMm);
+            }
+
+            return normalized;
+        }
+
+        private static bool TryParseMillimeter(string rawValue, out double value)
+        {
+            value = 0;
+            if (string.IsNullOrWhiteSpace(rawValue))
+                return false;
+
+            var normalized = rawValue.Replace(',', '.');
+            return double.TryParse(
+                normalized,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
         }
 
         private static string ClassifyPaperSize(double widthMm, double heightMm)

@@ -185,11 +185,7 @@ namespace Licorp_CombineCAD.Services
                 OutputFolder = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
                 FileNameTemplate = "{SheetNumber} - {SheetName}",
                 ExportMode = "MultiLayout",
-                DwgVersion = "2018",
-                AutoBindXRef = true,
-                MergeEngine = "AcCoreConsole",
-                VerifyCombinedDwg = true,
-                CreateSheetSet = true
+                DwgVersion = "2018"
             };
         }
 
@@ -211,12 +207,8 @@ namespace Licorp_CombineCAD.Services
                 profile.SortMode = "Sheet Number";
             if (string.IsNullOrWhiteSpace(profile.VerticalAlign))
                 profile.VerticalAlign = "Top";
-            if (string.IsNullOrWhiteSpace(profile.RasterImageMode))
-                profile.RasterImageMode = "KeepReference";
-            if (string.IsNullOrWhiteSpace(profile.MergeEngine))
-                profile.MergeEngine = "AcCoreConsole";
-            if (profile.SchemaVersion <= 0)
-                profile.SchemaVersion = 2;
+            if (profile.SchemaVersion < 3)
+                profile.SchemaVersion = 3;
         }
 
         private string ReadLastProfileId()
@@ -241,7 +233,7 @@ namespace Licorp_CombineCAD.Services
 
     public class ExportProfile
     {
-        public int SchemaVersion { get; set; } = 2;
+        public int SchemaVersion { get; set; } = 3;
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
         public string Name { get; set; } = "Default";
         public string Description { get; set; } = "";
@@ -252,21 +244,13 @@ namespace Licorp_CombineCAD.Services
         public string SelectedSetup { get; set; } = "";
         public string ExportMode { get; set; } = "MultiLayout";
         public string DwgVersion { get; set; } = "2018";
-        public bool AutoBindXRef { get; set; } = true;
         public bool SmartViewScale { get; set; } = false;
         public bool OpenAfterExport { get; set; } = false;
         public bool ProgressAlwaysOnTop { get; set; } = true;
         public bool PreserveCoincidentLines { get; set; } = false;
-        public bool CreateSubfolders { get; set; } = false;
         public string SortMode { get; set; } = "Sheet Number";
         public string SelectedSheetScheduleId { get; set; } = "";
         public string VerticalAlign { get; set; } = "Top";
-        public bool CreateSheetSet { get; set; } = true;
-        public string RasterImageMode { get; set; } = "KeepReference";
-        public string MergeEngine { get; set; } = "AcCoreConsole";
-        public bool VerifyCombinedDwg { get; set; } = true;
-        public bool HideScopeBoxes { get; set; } = true;
-        public bool HideReferencePlanes { get; set; } = true;
         public DateTime LastUsed { get; set; } = DateTime.Now;
     }
 }
