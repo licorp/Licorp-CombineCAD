@@ -315,7 +315,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
 
         private string ExportSingleSheet(ViewSheet viewSheet, SheetInfo sheetInfo, ExportSettings settings, DWGExportOptions options)
         {
-            string fileName = GenerateFileName(sheetInfo, settings.FileNameTemplate);
+            string fileName = GenerateFileName(sheetInfo, settings.FileNameTemplate, _document);
             string fullPath = Path.Combine(settings.OutputFolder, fileName + ".dwg");
 
             if (File.Exists(fullPath))
@@ -454,7 +454,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             }
 }
 
-    public static string GenerateFileName(SheetInfo sheet, string template)
+    public static string GenerateFileName(SheetInfo sheet, string template, Document document = null)
         {
             if (sheet == null)
                 return "";
@@ -465,7 +465,11 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             string fileName = template
                 .Replace("{SheetNumber}", sheet.SheetNumber ?? "")
                 .Replace("{SheetName}", sheet.SheetName ?? "")
-                .Replace("{Revision}", sheet.Revision ?? "");
+                .Replace("{PaperSize}", sheet.PaperSize ?? "")
+                .Replace("{Revision}", sheet.Revision ?? "")
+                .Replace("{Scale}", sheet.ScaleText ?? "")
+                .Replace("{ProjectNumber}", GetProjectInfoValue(document, "Number"))
+                .Replace("{ProjectName}", GetProjectInfoValue(document, "Name"));
 
             foreach (char c in Path.GetInvalidFileNameChars())
             {
@@ -477,6 +481,24 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                 fileName = !string.IsNullOrWhiteSpace(sheet.SheetNumber) ? sheet.SheetNumber : "Sheet";
 
             return fileName;
+        }
+
+        private static string GetProjectInfoValue(Document document, string propertyName)
+        {
+            try
+            {
+                var projectInfo = document?.ProjectInformation;
+                if (projectInfo == null)
+                    return "";
+
+                var property = projectInfo.GetType().GetProperty(propertyName);
+                var value = property == null ? null : property.GetValue(projectInfo, null);
+                return value == null ? "" : value.ToString();
+            }
+            catch
+            {
+                return "";
+            }
         }
 
         private void EnsureOutputFolder(string folder)

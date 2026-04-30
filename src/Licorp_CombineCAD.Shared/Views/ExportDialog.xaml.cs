@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Linq;
 using Autodesk.Revit.UI;
 using Licorp_CombineCAD.Models;
 using Licorp_CombineCAD.ViewModels;
@@ -10,6 +11,7 @@ namespace Licorp_CombineCAD.Views
     public partial class ExportDialog : Window
     {
         private bool _isDragging;
+        private bool _isBulkUpdatingCheckboxes;
         private Point _dragStartPoint;
         private SheetItemViewModel _dragSourceItem;
 
@@ -19,6 +21,20 @@ namespace Licorp_CombineCAD.Views
             var viewModel = new ExportDialogViewModel(uiDocument);
             viewModel.ExportMode = preselectedMode;
             DataContext = viewModel;
+            Loaded += ExportDialog_Loaded;
+            Closing += ExportDialog_Closing;
+        }
+
+        private async void ExportDialog_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is ExportDialogViewModel vm)
+                await vm.InitializeAsync();
+        }
+
+        private void ExportDialog_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            if (DataContext is ExportDialogViewModel vm)
+                vm.Dispose();
         }
 
         private void SheetDataGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -85,6 +101,32 @@ namespace Licorp_CombineCAD.Views
             }
 
             e.Handled = true;
+        }
+
+        private void SheetSelectionCheckBox_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isBulkUpdatingCheckboxes)
+                return;
+
+            var checkbox = sender as CheckBox;
+            var clickedSheet = checkbox?.DataContext as SheetItemViewModel;
+            if (checkbox == null || clickedSheet == null || SheetDataGrid?.SelectedItems == null)
+                return;
+
+            if (SheetDataGrid.SelectedItems.Count <= 1 || !SheetDataGrid.SelectedItems.Contains(clickedSheet))
+                return;
+
+            _isBulkUpdatingCheckboxes = true;
+            try
+            {
+                var newState = checkbox.IsChecked == true;
+                foreach (var item in SheetDataGrid.SelectedItems.OfType<SheetItemViewModel>())
+                    item.IsSelected = newState;
+            }
+            finally
+            {
+                _isBulkUpdatingCheckboxes = false;
+            }
         }
 
         private DataGridRow GetDataGridRow(DataGrid grid, MouseButtonEventArgs e)

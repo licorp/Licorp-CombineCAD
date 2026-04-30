@@ -42,7 +42,7 @@ namespace Licorp_CombineCAD.Services
                 .Select(s => new
                 {
                     Sheet = s,
-                    FileName = DwgExportService.GenerateFileName(s, template)
+                    FileName = DwgExportService.GenerateFileName(s, template, _document)
                 })
                 .GroupBy(x => x.FileName ?? "", StringComparer.OrdinalIgnoreCase)
                 .ToList();
