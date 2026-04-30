@@ -9,7 +9,7 @@ namespace Licorp_CombineCAD.Services
 {
     /// <summary>
     /// Collects sheet metadata. The initial grid load stays intentionally light;
-    /// heavier viewport/scale analysis is hydrated only for selected sheets at export time.
+    /// export-only checks are hydrated only for selected sheets at export time.
     /// </summary>
     public class SheetCollectorService
     {
@@ -78,15 +78,13 @@ namespace Licorp_CombineCAD.Services
 
                 sheet.SheetNumber = viewSheet.SheetNumber ?? sheet.SheetNumber ?? "";
                 sheet.SheetName = viewSheet.Name ?? sheet.SheetName ?? "";
-                ApplyRevision(sheet, viewSheet);
-
                 if (string.IsNullOrWhiteSpace(sheet.PaperSize))
                 {
                     titleBlocksBySheetId.TryGetValue(GetElementIdValue(viewSheet.Id), out var titleBlock);
                     ApplyPaperSize(sheet, titleBlock);
                 }
 
-                AnalyzeViewports(sheet, viewSheet);
+                ApplyViewportPresence(sheet, viewSheet);
             }
 
             Trace.WriteLine($"[CombineCAD] Hydrated {sheets.Count} selected sheets in {timer.ElapsedMilliseconds}ms");
@@ -99,9 +97,7 @@ namespace Licorp_CombineCAD.Services
                 ElementId = viewSheet.Id,
                 SheetNumber = viewSheet.SheetNumber ?? "",
                 SheetName = viewSheet.Name ?? "",
-                Revision = "",
                 PaperSize = "",
-                ScaleText = "",
                 IsSelected = false
             };
         }
@@ -137,19 +133,6 @@ namespace Licorp_CombineCAD.Services
             return result;
         }
 
-        private static void ApplyRevision(SheetInfo info, ViewSheet viewSheet)
-        {
-            try
-            {
-                var revParam = viewSheet.get_Parameter(BuiltInParameter.SHEET_CURRENT_REVISION);
-                info.Revision = revParam?.AsString() ?? "";
-            }
-            catch
-            {
-                info.Revision = "";
-            }
-        }
-
         private static void ApplyPaperSize(SheetInfo info, Element titleBlock)
         {
             if (info == null || titleBlock == null)
@@ -169,71 +152,17 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
-        private void AnalyzeViewports(SheetInfo info, ViewSheet viewSheet)
+        private void ApplyViewportPresence(SheetInfo info, ViewSheet viewSheet)
         {
             try
             {
                 var viewportIds = viewSheet.GetAllViewports();
                 info.HasNoView = viewportIds == null || viewportIds.Count == 0;
-
-                if (info.HasNoView)
-                {
-                    info.ViewScales = new List<int>();
-                    info.PrimaryScale = 0;
-                    info.ScaleText = "No views";
-                    return;
-                }
-
-                var scales = new List<int>();
-                double maxArea = 0;
-                int primaryScale = 0;
-
-                foreach (ElementId vpId in viewportIds)
-                {
-                    var viewport = _document.GetElement(vpId) as Viewport;
-                    if (viewport == null) continue;
-
-                    var view = _document.GetElement(viewport.ViewId) as View;
-                    if (view == null) continue;
-
-                    int viewScale = view.Scale;
-                    scales.Add(viewScale);
-
-                    try
-                    {
-                        var outline = viewport.GetBoxOutline();
-                        if (outline != null)
-                        {
-                            double area = (outline.MaximumPoint.X - outline.MinimumPoint.X)
-                                        * (outline.MaximumPoint.Y - outline.MinimumPoint.Y);
-                            if (area > maxArea)
-                            {
-                                maxArea = area;
-                                primaryScale = viewScale;
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        if (primaryScale == 0) primaryScale = viewScale;
-                    }
-                }
-
-                info.ViewScales = scales;
-                info.PrimaryScale = primaryScale;
-
-                var uniqueScales = scales.Distinct().ToList();
-                if (uniqueScales.Count == 1)
-                    info.ScaleText = $"1:{uniqueScales[0]}";
-                else if (uniqueScales.Count > 1)
-                    info.ScaleText = "As Indicated";
-                else
-                    info.ScaleText = "-";
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[CombineCAD] Viewport analysis error for {info.SheetNumber}: {ex.Message}");
-                info.ScaleText = "-";
+                Trace.WriteLine($"[CombineCAD] Viewport check error for {info.SheetNumber}: {ex.Message}");
+                info.HasNoView = false;
             }
         }
 

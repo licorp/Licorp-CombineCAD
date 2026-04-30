@@ -466,8 +466,6 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                 .Replace("{SheetNumber}", sheet.SheetNumber ?? "")
                 .Replace("{SheetName}", sheet.SheetName ?? "")
                 .Replace("{PaperSize}", sheet.PaperSize ?? "")
-                .Replace("{Revision}", sheet.Revision ?? "")
-                .Replace("{Scale}", sheet.ScaleText ?? "")
                 .Replace("{ProjectNumber}", GetProjectInfoValue(document, "Number"))
                 .Replace("{ProjectName}", GetProjectInfoValue(document, "Name"));
 

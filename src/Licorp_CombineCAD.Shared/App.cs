@@ -54,9 +54,6 @@ namespace Licorp_CombineCAD
 
             string ns = "Licorp_CombineCAD.Commands";
 
-            var splitData = new SplitButtonData("CombineCADExport", "Export\nDWG");
-            SplitButton splitButton = panel.AddItem(splitData) as SplitButton;
-
             var multiLayoutData = new PushButtonData(
                 "ExportMultiLayout",
                 "Multi-Layout\nDWG",
@@ -66,16 +63,16 @@ namespace Licorp_CombineCAD
             multiLayoutData.LongDescription = "Export selected Revit sheets to individual DWG files, " +
                 "then automatically merge them into a single DWG with multiple layouts " +
                 "(each sheet = 1 layout). Requires AutoCAD.";
-            var multiBtn = splitButton.AddPushButton(multiLayoutData);
+            var multiBtn = panel.AddItem(multiLayoutData) as PushButton;
             SetButtonIcon(multiBtn, "multi_layout", Colors.DodgerBlue);
 
-var singleLayoutData = new PushButtonData(
+            var singleLayoutData = new PushButtonData(
                 "ExportSingleLayout",
                 "Single Layout\nDWG",
                 assemblyPath,
                 $"{ns}.ExportSingleLayoutCommand");
             singleLayoutData.ToolTip = "Combine all sheets into 1 DWG with 1 layout";
-            var singleBtn = splitButton.AddPushButton(singleLayoutData);
+            var singleBtn = panel.AddItem(singleLayoutData) as PushButton;
             SetButtonIcon(singleBtn, "single_layout", Colors.MediumOrchid);
 
             var modelSpaceData = new PushButtonData(
@@ -84,7 +81,7 @@ var singleLayoutData = new PushButtonData(
                 assemblyPath,
                 $"{ns}.ExportModelSpaceCommand");
             modelSpaceData.ToolTip = "Export sheets to Model Space with title blocks";
-            var msBtn = splitButton.AddPushButton(modelSpaceData);
+            var msBtn = panel.AddItem(modelSpaceData) as PushButton;
             SetButtonIcon(msBtn, "model_space", Colors.DarkOrange);
 
             panel.AddSeparator();

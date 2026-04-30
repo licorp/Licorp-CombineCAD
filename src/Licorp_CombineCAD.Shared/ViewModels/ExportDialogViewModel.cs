@@ -1352,8 +1352,6 @@ namespace Licorp_CombineCAD.ViewModels
                 .Replace("{SheetNumber}", sample?.SheetNumber ?? "A101")
                 .Replace("{SheetName}", sample?.SheetName ?? "Floor Plan")
                 .Replace("{PaperSize}", sample?.PaperSize ?? "A1")
-                .Replace("{Revision}", sample?.Revision ?? "Rev A")
-                .Replace("{Scale}", sample?.ScaleText ?? "1-100")
                 .Replace("{ProjectNumber}", _projectNumber)
                 .Replace("{ProjectName}", _projectName);
 

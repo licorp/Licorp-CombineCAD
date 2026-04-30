@@ -64,8 +64,6 @@ namespace Licorp_CombineCAD.Views
                 .Replace("{SheetNumber}", "A101")
                 .Replace("{SheetName}", "Floor Plan")
                 .Replace("{PaperSize}", "A1")
-                .Replace("{Revision}", "Rev A")
-                .Replace("{Scale}", "1-100")
                 .Replace("{ProjectNumber}", _projectNumber)
                 .Replace("{ProjectName}", _projectName);
 

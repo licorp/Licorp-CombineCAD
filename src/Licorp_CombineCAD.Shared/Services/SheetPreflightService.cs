@@ -112,15 +112,6 @@ namespace Licorp_CombineCAD.Services
                     "No model viewport detected. The sheet will still be exported for title blocks, schedules, images, and annotations.");
             }
 
-            if (sheet.ViewScales != null && sheet.ViewScales.Distinct().Count() > 1)
-            {
-                result.AddIssue(
-                    PreflightSeverity.Info,
-                    sheet.SheetNumber,
-                    sheet.SheetName,
-                    "Multiple view scales detected on this sheet.");
-            }
-
             if (rasterCount > 0)
             {
                 result.AddIssue(
