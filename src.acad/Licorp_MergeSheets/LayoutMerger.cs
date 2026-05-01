@@ -287,11 +287,24 @@ modelType = srcLayout.ModelType;
 
                                         int bakedCountDirect = BakeModelViewsToPaperSpace(
                                             sourceDb, srcTrans, outputDb, outputTrans, destBtrDirect, sourceViewportsDirect, desiredName);
-                                        int erasedViewportCountDirect = bakedCountDirect > 0
+                                        bool scheduleHasPaperContent =
+                                            srcStats.EntityCount == 0 &&
+                                            LayoutHasContent(destBtrDirect, outputTrans);
+                                        int erasedViewportCountDirect = bakedCountDirect > 0 || scheduleHasPaperContent
                                             ? EraseAllLayoutViewports(outputTrans, destBtrDirect, desiredName)
                                             : 0;
                                         if (bakedCountDirect == 0)
-                                            AcadLogger.LogWarning($"GD2: Paper bake produced no entities; keeping original viewport(s) for '{desiredName}'");
+                                        {
+                                            if (scheduleHasPaperContent)
+                                            {
+                                                AcadLogger.LogInfo(
+                                                    $"GD2: '{desiredName}' is schedule-only with PaperSpace content; removed viewport(s) so the layout behaves like a normal sheet tab.");
+                                            }
+                                            else
+                                            {
+                                                AcadLogger.LogWarning($"GD2: Paper bake produced no entities; keeping original viewport(s) for '{desiredName}'");
+                                            }
+                                        }
                                         AcadLogger.LogInfo(
                                             $"GD2: Baked {bakedCountDirect} model entity clone(s) to PaperSpace and erased " +
                                             $"{erasedViewportCountDirect} viewport(s) for '{desiredName}'");
@@ -936,11 +949,14 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                 if (config == null || string.IsNullOrWhiteSpace(config.OutputPath) || !File.Exists(config.OutputPath))
                     return;
 
+                if (!string.Equals(config.RasterImageMode, "EmbedAsOle", StringComparison.OrdinalIgnoreCase))
+                {
+                    AcadLogger.LogInfo($"Raster image handling skipped: mode={config.RasterImageMode}");
+                    return;
+                }
+
                 var rasterInfos = ScanRasterImages(config.OutputPath);
                 AcadLogger.LogInfo($"Raster image scan: mode={config.RasterImageMode}, count={rasterInfos.Count}");
-
-                if (!string.Equals(config.RasterImageMode, "EmbedAsOle", StringComparison.OrdinalIgnoreCase))
-                    return;
 
                 if (rasterInfos.Count == 0)
                 {
@@ -1518,7 +1534,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
         private int RegenerateLayouts(Database db, string mode)
         {
-            var layoutNames = new List<string>();
+            var layoutInfos = new List<LayoutRegenInfo>();
             int regeneratedCount = 0;
             var previousWorkingDb = HostApplicationServices.WorkingDatabase;
 
@@ -1537,28 +1553,76 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                         try
                         {
                             var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
-                            orderedLayouts.Add(Tuple.Create(layout.TabOrder, entry.Key));
+                            var paperSpace = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+                            int paperEntityCount = 0;
+                            int viewportCount = 0;
+                            int extentsEntityCount = 0;
+
+                            foreach (ObjectId id in paperSpace)
+                            {
+                                try
+                                {
+                                    var ent = tr.GetObject(id, OpenMode.ForRead, false) as Entity;
+                                    if (ent == null || ent.IsErased)
+                                        continue;
+
+                                    paperEntityCount++;
+                                    if (ent is Viewport)
+                                        viewportCount++;
+                                }
+                                catch
+                                {
+                                }
+                            }
+
+                            var paperExtents = GetExtents(paperSpace, tr, out extentsEntityCount);
+                            layoutInfos.Add(new LayoutRegenInfo
+                            {
+                                Name = entry.Key,
+                                TabOrder = layout.TabOrder,
+                                PaperEntityCount = paperEntityCount,
+                                ViewportCount = viewportCount,
+                                ExtentsEntityCount = extentsEntityCount,
+                                PaperExtents = paperExtents,
+                                RequiresRegen = viewportCount > 0
+                            });
                         }
                         catch
                         {
-                            orderedLayouts.Add(Tuple.Create(int.MaxValue, entry.Key));
+                            layoutInfos.Add(new LayoutRegenInfo
+                            {
+                                Name = entry.Key,
+                                TabOrder = int.MaxValue,
+                                RequiresRegen = true
+                            });
                         }
                     }
-
-                    layoutNames = orderedLayouts
-                        .OrderBy(x => x.Item1)
-                        .ThenBy(x => x.Item2, StringComparer.OrdinalIgnoreCase)
-                        .Select(x => x.Item2)
-                        .ToList();
 
                     tr.Commit();
                 }
 
+                layoutInfos = layoutInfos
+                    .OrderBy(x => x.TabOrder)
+                    .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                var layoutsToRegen = layoutInfos.Where(x => x.RequiresRegen).ToList();
+
                 AcadLogger.LogSection($"Regenerating Layouts ({mode})");
                 AcadLogger.LogInfo("Avoid interacting with AutoCAD until layout regeneration is finished.");
-                AcadLogger.LogInfo($"REGENERATING LAYOUT -> 0/{layoutNames.Count}");
+                AcadLogger.LogInfo(
+                    $"REGENERATING LAYOUT -> 0/{layoutsToRegen.Count} " +
+                    $"(skipped {layoutInfos.Count - layoutsToRegen.Count} stable layout(s) without viewport refresh needs)");
 
-                if (layoutNames.Count == 0)
+                foreach (var info in layoutInfos.Where(x => !x.RequiresRegen))
+                {
+                    AcadLogger.LogInfo(
+                        $"REGENERATING LAYOUT skip: {info.Name}, " +
+                        $"entities={info.PaperEntityCount}, viewports={info.ViewportCount}, " +
+                        $"extentsEntities={info.ExtentsEntityCount}, extents={FormatExtents(info.PaperExtents)}");
+                }
+
+                if (layoutInfos.Count == 0)
                 {
                     AcadLogger.LogWarning($"REGENERATING LAYOUT: no paper layouts found for {mode}");
                     return 0;
@@ -1575,13 +1639,29 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                     AcadLogger.LogWarning($"REGENERATING LAYOUT: failed to switch database to paper space: {ex.Message}");
                 }
 
-                for (int i = 0; i < layoutNames.Count; i++)
+                if (layoutsToRegen.Count == 0)
                 {
-                    string layoutName = layoutNames[i];
-                    int paperEntityCount = 0;
-                    int viewportCount = 0;
-                    int extentsEntityCount = 0;
-                    Extents3d paperExtents = new Extents3d(Point3d.Origin, Point3d.Origin);
+                    try
+                    {
+                        db.UpdateExt(true);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        AcadLogger.LogWarning($"REGENERATING LAYOUT: final UpdateExt failed: {ex.Message}");
+                    }
+
+                    AcadLogger.LogInfo("REGENERATING LAYOUT complete: 0 layouts required viewport refresh");
+                    return 0;
+                }
+
+                for (int i = 0; i < layoutsToRegen.Count; i++)
+                {
+                    var layoutInfo = layoutsToRegen[i];
+                    string layoutName = layoutInfo.Name;
+                    int paperEntityCount = layoutInfo.PaperEntityCount;
+                    int viewportCount = layoutInfo.ViewportCount;
+                    int extentsEntityCount = layoutInfo.ExtentsEntityCount;
+                    Extents3d paperExtents = layoutInfo.PaperExtents;
 
                     try
                     {
@@ -1606,6 +1686,10 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                             var layout = (Layout)tr.GetObject(layouts.GetAt(layoutName), OpenMode.ForRead);
                             var paperSpace = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+                            paperEntityCount = 0;
+                            viewportCount = 0;
+                            extentsEntityCount = 0;
+                            paperExtents = new Extents3d(Point3d.Origin, Point3d.Origin);
 
                             foreach (ObjectId id in paperSpace)
                             {
@@ -1639,7 +1723,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                         regeneratedCount++;
                         AcadLogger.LogInfo(
-                            $"REGENERATING LAYOUT -> {i + 1}/{layoutNames.Count}: {layoutName}, " +
+                            $"REGENERATING LAYOUT -> {i + 1}/{layoutsToRegen.Count}: {layoutName}, " +
                             $"entities={paperEntityCount}, viewports={viewportCount}, extentsEntities={extentsEntityCount}, " +
                             $"extents={FormatExtents(paperExtents)}");
                     }
@@ -1658,7 +1742,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                     AcadLogger.LogWarning($"REGENERATING LAYOUT: final UpdateExt failed: {ex.Message}");
                 }
 
-                AcadLogger.LogInfo($"REGENERATING LAYOUT complete: {regeneratedCount}/{layoutNames.Count}");
+                AcadLogger.LogInfo($"REGENERATING LAYOUT complete: {regeneratedCount}/{layoutsToRegen.Count}");
             }
             catch (System.Exception ex)
             {
@@ -3540,6 +3624,17 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             public int ContentEntityCount;
             public int BackgroundEntityCount;
             public int ViewportEntityCount;
+        }
+
+        private class LayoutRegenInfo
+        {
+            public string Name;
+            public int TabOrder;
+            public int PaperEntityCount;
+            public int ViewportCount;
+            public int ExtentsEntityCount;
+            public Extents3d PaperExtents;
+            public bool RequiresRegen;
         }
 
         private class RasterImageInfo
