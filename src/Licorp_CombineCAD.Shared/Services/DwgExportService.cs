@@ -191,10 +191,11 @@ namespace Licorp_CombineCAD.Services
                 Trace.WriteLine("[DwgExport] SmartScale enabled");
             }
 
-            EnsureOutputFolder(settings.OutputFolder);
-
             try
             {
+                EnsureOutputFolder(settings.OutputFolder);
+                PrepareOutputFolderForExport(settings.OutputFolder);
+
                 for (int i = 0; i < sheets.Count; i++)
                 {
                     if (cancellationToken.IsCancellationRequested)
@@ -254,10 +255,11 @@ namespace Licorp_CombineCAD.Services
                             }
                         }
 
-                        // Fix empty ModelSpace for sheets with no viewports (schedules only)
                         if (sheet.HasNoView && !string.IsNullOrEmpty(filePath))
                         {
-                            FixEmptyModelSpaceFile(filePath);
+                            Trace.WriteLine(
+                                $"[DwgExport] {sheet.SheetNumber} is schedule/annotation-only; " +
+                                "skipping post-export AcCoreConsole fix to avoid long waits.");
                         }
 
                         if (!string.IsNullOrEmpty(filePath))
@@ -319,14 +321,8 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             string fileName = GenerateFileName(sheetInfo, settings.FileNameTemplate, _document);
             string fullPath = Path.Combine(settings.OutputFolder, fileName + ".dwg");
 
-            if (File.Exists(fullPath))
-            {
-                try { File.Delete(fullPath); }
-                catch (Exception delEx)
-                {
-                    Trace.WriteLine($"[DwgExport] Failed to delete existing file: {delEx.Message}");
-                }
-            }
+            DeleteExportOutputIfExists(fullPath);
+            DeleteExportOutputIfExists(Path.Combine(settings.OutputFolder, fileName + ".pcp"));
 
             try
             {
@@ -516,6 +512,74 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             }
         }
 
+        private void PrepareOutputFolderForExport(string folder)
+        {
+            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+                return;
+
+            var prefix = GetRevitGeneratedAssetPrefix();
+            if (string.IsNullOrWhiteSpace(prefix))
+                return;
+
+            foreach (var file in Directory.EnumerateFiles(folder))
+            {
+                var name = Path.GetFileName(file);
+                if (!IsRevitGeneratedSupportFile(name, prefix))
+                    continue;
+
+                DeleteExportOutputIfExists(file);
+            }
+        }
+
+        private string GetRevitGeneratedAssetPrefix()
+        {
+            var title = _document?.Title;
+            if (string.IsNullOrWhiteSpace(title))
+                return "";
+
+            var chars = title.Where(char.IsLetterOrDigit).ToArray();
+            return new string(chars);
+        }
+
+        private static bool IsRevitGeneratedSupportFile(string fileName, string prefix)
+        {
+            if (string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(prefix))
+                return false;
+
+            if (!fileName.StartsWith(prefix + "-", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var ext = Path.GetExtension(fileName);
+            return ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".tif", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".tiff", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void DeleteExportOutputIfExists(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                return;
+
+            try
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+                File.Delete(path);
+                Trace.WriteLine($"[DwgExport] Removed old export file: {path}");
+            }
+            catch (Exception ex)
+            {
+                var message =
+                    "Cannot overwrite an existing export file because it is open or locked. " +
+                    $"Close AutoCAD/AcCoreConsole or the file, then export again: {path}";
+                Trace.WriteLine($"[DwgExport] {message}. {ex.Message}");
+                throw new IOException(message, ex);
+            }
+        }
+
         private static void DispatcherDoEvents()
         {
             var dispatcher = Application.Current?.Dispatcher;
@@ -615,15 +679,23 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                     Arguments = $"/i \"{filePath}\" /l \"{lispPath}\"",
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardOutput = false,
+                    RedirectStandardError = false
                 };
 
                 using (var process = Process.Start(startInfo))
                 {
                     if (process != null)
                     {
-                        process.WaitForExit();
+                        const int fixTimeoutMs = 30000;
+                        if (!process.WaitForExit(fixTimeoutMs))
+                        {
+                            try { process.Kill(); }
+                            catch { }
+                            Trace.WriteLine(
+                                $"[DwgExport] Fix timed out after {fixTimeoutMs / 1000}s for {Path.GetFileName(filePath)}");
+                            return;
+                        }
                     }
                 }
 

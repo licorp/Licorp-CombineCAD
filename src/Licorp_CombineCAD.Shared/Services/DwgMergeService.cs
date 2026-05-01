@@ -183,15 +183,24 @@ namespace Licorp_CombineCAD.Services
                         Arguments = $"/i \"{file}\" /s \"{scriptPath}\"",
                         UseShellExecute = false,
                         CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
+                        RedirectStandardOutput = false,
+                        RedirectStandardError = false
                     };
 
                     using (var process = Process.Start(startInfo))
                     {
                         if (process != null)
                         {
-                            process.WaitForExit();
+                            const int fixTimeoutMs = 30000;
+                            if (!process.WaitForExit(fixTimeoutMs))
+                            {
+                                try { process.Kill(); }
+                                catch { }
+
+                                Trace.WriteLine(
+                                    $"[Merge] FixEmptyModelSpace timed out after {fixTimeoutMs / 1000}s for {Path.GetFileName(file)}");
+                                continue;
+                            }
                         }
                     }
 
@@ -238,8 +247,7 @@ namespace Licorp_CombineCAD.Services
                 return false;
             }
 
-            // Fix files that may have empty ModelSpace (sheets with only schedules)
-            FixEmptyModelSpaceFiles(validFiles, cancellationToken);
+            Trace.WriteLine("[Merge] Skipping pre-merge AcCoreConsole ModelSpace fix; layout merger handles empty/schedule sheets internally.");
 
             string configPath = null;
             string scriptPath = null;

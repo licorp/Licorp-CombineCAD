@@ -16,6 +16,7 @@ namespace Licorp_MergeSheets
         private const double PaperBackgroundFallbackWidth = 1066.8;
         private const double PaperBackgroundFallbackHeight = 762.0;
         private const double ModelSpaceSheetMinGap = 100.0;
+        private const int AutoCadLayoutNameMaxLength = 31;
         
         // Track ModelSpace offset for each source file
         private Dictionary<string, Vector3d> _msOffsets = new Dictionary<string, Vector3d>();
@@ -58,6 +59,8 @@ namespace Licorp_MergeSheets
                 _msOffsets.Clear();
                 _currentMsXOffset = 0.0;
                 var sourceInfos = new List<SourceFileInfo>();
+                var pendingScheduleOnlyLayouts = new List<SourceFileInfo>();
+                var usedLayoutNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 using (outputDb)
                 {
@@ -70,12 +73,13 @@ namespace Licorp_MergeSheets
                     using (var trans = outputDb.TransactionManager.StartTransaction())
                     {
                         var firstSource = config.SourceFiles.First(s => File.Exists(s.Path));
+                        var firstLayoutName = GetSafeAutoCadLayoutName(firstSource.Layout ?? "Layout1", usedLayoutNames);
                         
                         // Rename base layout
                         if (!string.IsNullOrEmpty(firstSource.Layout))
                         {
-                            RenameLayoutInDb(outputDb, "Layout1", firstSource.Layout);
-                            AcadLogger.LogInfo($"Renamed base layout to '{firstSource.Layout}'");
+                            RenameLayoutInDb(outputDb, "Layout1", firstLayoutName);
+                            AcadLogger.LogInfo($"Renamed base layout to '{firstLayoutName}'");
                         }
 
                         // Tính extents của base ModelSpace → khởi tạo offset
@@ -96,7 +100,7 @@ namespace Licorp_MergeSheets
                         AcadLogger.LogInfo($"Base MS extents width: {baseWidth:F2}");
 
                         // Lưu thông tin file đầu tiên
-                        var firstLayout = GetSourceLayout(outputDb, trans, firstSource.Layout ?? "Layout1");
+                        var firstLayout = GetSourceLayout(outputDb, trans, firstLayoutName);
                         var baseOccupiedExtents = baseExtents;
                         if (firstLayout != null)
                         {
@@ -104,7 +108,6 @@ namespace Licorp_MergeSheets
                                 baseExtents,
                                 GetLayoutModelViewExtents(outputDb, trans, firstLayout, baseExtents, "Base layout"));
                             var firstBtr = (BlockTableRecord)trans.GetObject(firstLayout.BlockTableRecordId, OpenMode.ForWrite);
-                            var firstLayoutName = firstSource.Layout ?? "Layout1";
                             var firstViewports = CollectModelViewportInfos(trans, firstBtr, $"BASE usable viewports: {firstLayoutName}");
                             int baseBakedCount = BakeModelViewsToPaperSpace(
                                 outputDb, trans, outputDb, trans, firstBtr, firstViewports, firstLayoutName);
@@ -121,7 +124,7 @@ namespace Licorp_MergeSheets
                             sourceInfos.Add(new SourceFileInfo
                             {
                                 FilePath = baseFile,
-                                LayoutName = firstSource.Layout ?? "Layout1",
+                                LayoutName = firstLayoutName,
                                 MsOffset = new Vector3d(0, 0, 0),
                                 MsExtents = baseExtents,
                                 ModelType = firstLayout.ModelType,
@@ -153,7 +156,8 @@ namespace Licorp_MergeSheets
                             continue;
                         }
 
-                        string desiredName = source.Layout ?? $"Layout{fileIndex}";
+                        string requestedName = source.Layout ?? $"Layout{fileIndex}";
+                        string desiredName = GetSafeAutoCadLayoutName(requestedName, usedLayoutNames);
                         AcadLogger.LogInfo($"Processing: {Path.GetFileName(source.Path)} → Layout '{desiredName}'");
 
                         PlotSettings savedPlotSettings = null;
@@ -255,7 +259,9 @@ modelType = srcLayout.ModelType;
 
                                 // === GIAI DOAN 2: Clone source Layout object directly ===
                                 // This keeps AutoCAD's internal Layout/PaperSpace/Viewport wiring intact.
-                                if (UseDirectLayoutClone())
+                                var shouldUseDirectLayoutClone = UseDirectLayoutClone();
+
+                                if (shouldUseDirectLayoutClone)
                                 {
                                     var srcBtrIdDirect = srcLayout.BlockTableRecordId;
                                     var srcBtrDirect = (BlockTableRecord)srcTrans.GetObject(srcBtrIdDirect, OpenMode.ForRead);
@@ -265,48 +271,56 @@ modelType = srcLayout.ModelType;
                                     var destBtrIdDirect = CloneLayoutFromSource(sourceDb, outputDb, srcTrans, outputTrans, srcLayout, desiredName);
                                     if (destBtrIdDirect.IsNull)
                                     {
-                                        AcadLogger.LogError($"Failed to clone layout '{desiredName}'");
+                                        AcadLogger.LogWarning(
+                                            $"GD2: Direct layout clone failed for '{desiredName}'. " +
+                                            "Falling back to manual layout creation.");
+                                    }
+                                    else
+                                    {
+                                        var destBtrDirect = (BlockTableRecord)outputTrans.GetObject(destBtrIdDirect, OpenMode.ForWrite);
+                                        var destLayoutDirect = (Layout)outputTrans.GetObject(destBtrDirect.LayoutId, OpenMode.ForWrite);
+                                        AcadLogger.LogInfo(
+                                            $"GD2: Cloned layout object for '{desiredName}', source usable viewport count={sourceViewportsDirect.Count}, " +
+                                            $"paperSize=({destLayoutDirect.PlotPaperSize.X:F2},{destLayoutDirect.PlotPaperSize.Y:F2})");
+
+                                        LogViewportCollection(outputTrans, destBtrDirect, $"DEST after layout clone before fix: {desiredName}");
+
+                                        int bakedCountDirect = BakeModelViewsToPaperSpace(
+                                            sourceDb, srcTrans, outputDb, outputTrans, destBtrDirect, sourceViewportsDirect, desiredName);
+                                        int erasedViewportCountDirect = bakedCountDirect > 0
+                                            ? EraseAllLayoutViewports(outputTrans, destBtrDirect, desiredName)
+                                            : 0;
+                                        if (bakedCountDirect == 0)
+                                            AcadLogger.LogWarning($"GD2: Paper bake produced no entities; keeping original viewport(s) for '{desiredName}'");
+                                        AcadLogger.LogInfo(
+                                            $"GD2: Baked {bakedCountDirect} model entity clone(s) to PaperSpace and erased " +
+                                            $"{erasedViewportCountDirect} viewport(s) for '{desiredName}'");
+
+                                        if (srcStats.EntityCount == 0 && !LayoutHasContent(destBtrDirect, outputTrans))
+                                        {
+                                            AddSchedulePlaceholderContent(destBtrDirect, outputTrans, desiredName, destLayoutDirect);
+                                        }
+
+                                        LogViewportCollection(outputTrans, destBtrDirect, $"DEST after paper bake: {desiredName}");
+
+                                        sourceInfos.Add(new SourceFileInfo
+                                        {
+                                            FilePath = source.Path,
+                                            LayoutName = desiredName,
+                                            MsOffset = msOffset,
+                                            MsExtents = srcExtents,
+                                            ModelType = modelType,
+                                            PlotSettings = savedPlotSettings
+                                        });
+
+                                        outputTrans.Commit();
+                                        srcTrans.Commit();
+
+                                        clonedCount++;
+                                        AcadLogger.LogInfo($"Successfully cloned layout '{desiredName}'");
                                         fileIndex++;
                                         continue;
                                     }
-
-                                    var destBtrDirect = (BlockTableRecord)outputTrans.GetObject(destBtrIdDirect, OpenMode.ForWrite);
-                                    var destLayoutDirect = (Layout)outputTrans.GetObject(destBtrDirect.LayoutId, OpenMode.ForWrite);
-                                    AcadLogger.LogInfo(
-                                        $"GD2: Cloned layout object for '{desiredName}', source usable viewport count={sourceViewportsDirect.Count}, " +
-                                        $"paperSize=({destLayoutDirect.PlotPaperSize.X:F2},{destLayoutDirect.PlotPaperSize.Y:F2})");
-
-                                    LogViewportCollection(outputTrans, destBtrDirect, $"DEST after layout clone before fix: {desiredName}");
-
-                                    int bakedCountDirect = BakeModelViewsToPaperSpace(
-                                        sourceDb, srcTrans, outputDb, outputTrans, destBtrDirect, sourceViewportsDirect, desiredName);
-                                    int erasedViewportCountDirect = bakedCountDirect > 0
-                                        ? EraseAllLayoutViewports(outputTrans, destBtrDirect, desiredName)
-                                        : 0;
-                                    if (bakedCountDirect == 0)
-                                        AcadLogger.LogWarning($"GD2: Paper bake produced no entities; keeping original viewport(s) for '{desiredName}'");
-                                    AcadLogger.LogInfo(
-                                        $"GD2: Baked {bakedCountDirect} model entity clone(s) to PaperSpace and erased " +
-                                        $"{erasedViewportCountDirect} viewport(s) for '{desiredName}'");
-                                    LogViewportCollection(outputTrans, destBtrDirect, $"DEST after paper bake: {desiredName}");
-
-                                    sourceInfos.Add(new SourceFileInfo
-                                    {
-                                        FilePath = source.Path,
-                                        LayoutName = desiredName,
-                                        MsOffset = msOffset,
-                                        MsExtents = srcExtents,
-                                        ModelType = modelType,
-                                        PlotSettings = savedPlotSettings
-                                    });
-
-                                    outputTrans.Commit();
-                                    srcTrans.Commit();
-
-                                    clonedCount++;
-                                    AcadLogger.LogInfo($"Successfully cloned layout '{desiredName}'");
-                                    fileIndex++;
-                                    continue;
                                 }
 
                                 // === GIAI ĐOẠN 2: Tạo Layout + Clone PaperSpace ===
@@ -314,9 +328,22 @@ modelType = srcLayout.ModelType;
 var destBtrId = CreateNewLayoutInDb(outputDb, outputTrans, desiredName);
             if (destBtrId.IsNull)
             {
-                AcadLogger.LogError($"Failed to create layout '{desiredName}'");
-                fileIndex++;
-                continue;
+                destBtrId = ReuseEmptyDefaultLayout(outputDb, outputTrans, desiredName);
+                if (destBtrId.IsNull)
+                {
+                    AcadLogger.LogError($"Failed to create layout '{desiredName}'. Deferring as schedule-only layout.");
+                    pendingScheduleOnlyLayouts.Add(new SourceFileInfo
+                    {
+                        FilePath = source.Path,
+                        LayoutName = desiredName,
+                        MsOffset = msOffset,
+                        MsExtents = srcExtents,
+                        ModelType = modelType,
+                        PlotSettings = savedPlotSettings
+                    });
+                    fileIndex++;
+                    continue;
+                }
             }
 
             var destBtr = (BlockTableRecord)outputTrans.GetObject(destBtrId, OpenMode.ForWrite);
@@ -391,6 +418,11 @@ AcadLogger.LogInfo($"GD2: Cloned {psClonedCount}/{psIds.Count} PaperSpace entiti
                                 AcadLogger.LogInfo($"GD2: Fixed {vpFixedCount} cloned viewport(s) for '{desiredName}'");
                                 LogViewportCollection(outputTrans, destBtr, $"DEST after plot settings: {desiredName}");
 
+                                if (srcStats.EntityCount == 0 && !LayoutHasContent(destBtr, outputTrans))
+                                {
+                                    AddSchedulePlaceholderContent(destBtr, outputTrans, desiredName, destLayout);
+                                }
+
                                 // Lưu thông tin vào danh sách
                                 sourceInfos.Add(new SourceFileInfo
                                 {
@@ -414,6 +446,7 @@ AcadLogger.LogInfo($"GD2: Cloned {psClonedCount}/{psIds.Count} PaperSpace entiti
                         fileIndex++;
                     }
 
+                    clonedCount += EnsurePendingScheduleOnlyLayouts(outputDb, pendingScheduleOnlyLayouts, sourceInfos);
                     AcadLogger.LogInfo($"Total layouts cloned: {clonedCount}");
 
                     // Cleanup chỉ xóa các layout mặc định trống
@@ -2094,13 +2127,73 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 a.MaxPoint.Y >= b.MinPoint.Y;
         }
 
+        private string GetSafeAutoCadLayoutName(string requestedName, HashSet<string> usedLayoutNames)
+        {
+            var safeName = SanitizeAutoCadLayoutName(requestedName);
+            var uniqueName = MakeUniqueLayoutName(safeName, usedLayoutNames);
+
+            if (!string.Equals(requestedName, uniqueName, StringComparison.Ordinal))
+            {
+                AcadLogger.LogWarning(
+                    $"Layout name adjusted for AutoCAD: '{requestedName}' -> '{uniqueName}'");
+            }
+
+            return uniqueName;
+        }
+
+        private string SanitizeAutoCadLayoutName(string requestedName)
+        {
+            if (string.IsNullOrWhiteSpace(requestedName))
+                return "Layout";
+
+            var invalidChars = new HashSet<char>("<>/\\\":;?*|=,&".ToCharArray());
+            var chars = requestedName
+                .Trim()
+                .Select(c => invalidChars.Contains(c) || char.IsControl(c) ? ' ' : c)
+                .ToArray();
+
+            var safeName = new string(chars).Trim();
+            while (safeName.Contains("  "))
+                safeName = safeName.Replace("  ", " ");
+
+            if (string.IsNullOrWhiteSpace(safeName))
+                safeName = "Layout";
+
+            if (safeName.Length > AutoCadLayoutNameMaxLength)
+                safeName = safeName.Substring(0, AutoCadLayoutNameMaxLength).TrimEnd();
+
+            return safeName;
+        }
+
+        private string MakeUniqueLayoutName(string baseName, HashSet<string> usedLayoutNames)
+        {
+            if (usedLayoutNames == null)
+                return baseName;
+
+            var uniqueName = baseName;
+            int suffix = 2;
+
+            while (usedLayoutNames.Contains(uniqueName))
+            {
+                var suffixText = $" ({suffix})";
+                var prefixLength = Math.Max(1, AutoCadLayoutNameMaxLength - suffixText.Length);
+                var prefix = baseName.Length > prefixLength
+                    ? baseName.Substring(0, prefixLength).TrimEnd()
+                    : baseName;
+                uniqueName = prefix + suffixText;
+                suffix++;
+            }
+
+            usedLayoutNames.Add(uniqueName);
+            return uniqueName;
+        }
+
         private ObjectId CreateNewLayoutInDb(Database outputDb, Transaction outputTrans, string layoutName)
         {
             try
             {
                 // Lấy LayoutDictionary và BlockTable
                 var layoutDict = (DBDictionary)outputTrans.GetObject(outputDb.LayoutDictionaryId, OpenMode.ForWrite);
-                var bt = (BlockTable)outputTrans.GetObject(outputDb.BlockTableId, OpenMode.ForWrite);
                 
                 // Kiểm tra layout đã tồn tại chưa
                 if (layoutDict.Contains(layoutName))
@@ -2110,42 +2203,308 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 }
                 
                 // Tạo BTR mới với tên unique (không copy từ template)
-                string btrName = "*Paper_Space" + (layoutDict.Count);
-                int suffix = layoutDict.Count;
-                while (bt.Has(btrName))
+                foreach (DBDictionaryEntry entry in layoutDict)
                 {
-                    suffix++;
-                    btrName = "*Paper_Space" + suffix;
+                    var candidate = outputTrans.GetObject(entry.Value, OpenMode.ForWrite, false) as Layout;
+                    if (candidate == null || candidate.ModelType || !IsDefaultLayoutName(candidate.LayoutName))
+                        continue;
+
+                    var candidateBtr = outputTrans.GetObject(candidate.BlockTableRecordId, OpenMode.ForWrite, false) as BlockTableRecord;
+                    if (candidateBtr == null || LayoutHasContent(candidateBtr, outputTrans))
+                        continue;
+
+                    var existingIds = new List<ObjectId>();
+                    foreach (ObjectId id in candidateBtr)
+                        existingIds.Add(id);
+
+                    foreach (var id in existingIds)
+                    {
+                        try
+                        {
+                            var entity = outputTrans.GetObject(id, OpenMode.ForWrite, false) as Entity;
+                            if (entity != null && !entity.IsErased)
+                                entity.Erase();
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    var oldName = candidate.LayoutName;
+                    candidate.LayoutName = layoutName;
+                    candidate.TabOrder = layoutDict.Count - 1;
+                    AcadLogger.LogInfo(
+                        $"Reused empty default layout '{oldName}' as '{layoutName}' (BTR={candidateBtr.ObjectId}, Layout={candidate.ObjectId})");
+                    return candidateBtr.ObjectId;
+                }
+
+                var previousWorkingDb = HostApplicationServices.WorkingDatabase;
+                try
+                {
+                    HostApplicationServices.WorkingDatabase = outputDb;
+                    var newLayoutId = LayoutManager.Current.CreateLayout(layoutName);
+                    var newLayout = (Layout)outputTrans.GetObject(newLayoutId, OpenMode.ForWrite);
+                    newLayout.TabOrder = layoutDict.Count - 1;
+
+                    var newBtrId = newLayout.BlockTableRecordId;
+                    AcadLogger.LogInfo($"Created new layout '{layoutName}' via LayoutManager (BTR={newBtrId}, Layout={newLayoutId})");
+                    return newBtrId;
+                }
+                finally
+                {
+                    HostApplicationServices.WorkingDatabase = previousWorkingDb;
                 }
                 
                 // Tạo BTR mới - trống, không copy từ template
-                var newBtr = new BlockTableRecord();
-                newBtr.Name = btrName;
-                ObjectId newBtrId = bt.Add(newBtr);
-                outputTrans.AddNewlyCreatedDBObject(newBtr, true);
                 
                 // Tạo Layout object mới
-                var newLayout = new Layout();
-                newLayout.LayoutName = layoutName;
-                newLayout.BlockTableRecordId = newBtrId;
                 
                 // Thêm vào LayoutDictionary
-                ObjectId newLayoutId = layoutDict.SetAt(layoutName, newLayout);
-                outputTrans.AddNewlyCreatedDBObject(newLayout, true);
                 
                 // Link BTR với Layout
-                newBtr.LayoutId = newLayoutId;
                 
                 // Set TabOrder
-                newLayout.TabOrder = layoutDict.Count - 1;
-                
-                AcadLogger.LogInfo($"Created new layout '{layoutName}' (BTR={newBtrId}, Layout={newLayoutId})");
-                return newBtrId;
             }
             catch (System.Exception ex)
             {
                 AcadLogger.LogError($"CreateNewLayoutInDb failed: {ex.Message}");
                 return ObjectId.Null;
+            }
+        }
+
+        private int EnsurePendingScheduleOnlyLayouts(
+            Database outputDb,
+            List<SourceFileInfo> pendingLayouts,
+            List<SourceFileInfo> sourceInfos)
+        {
+            if (pendingLayouts == null || pendingLayouts.Count == 0)
+                return 0;
+
+            int recoveredCount = 0;
+            AcadLogger.LogSection("Schedule-only Layout Recovery");
+            AcadLogger.LogInfo($"SCHEDULE RECOVERY: pending={pendingLayouts.Count}");
+
+            foreach (var info in pendingLayouts)
+            {
+                if (info == null || string.IsNullOrWhiteSpace(info.LayoutName))
+                    continue;
+
+                if (sourceInfos.Any(x => string.Equals(x.LayoutName, info.LayoutName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    AcadLogger.LogInfo($"SCHEDULE RECOVERY: '{info.LayoutName}' already exists in source info list");
+                    continue;
+                }
+
+                if (!EnsurePendingScheduleOnlyLayout(outputDb, info))
+                    continue;
+
+                sourceInfos.Add(CloneSourceInfo(info));
+                recoveredCount++;
+            }
+
+            AcadLogger.LogInfo($"SCHEDULE RECOVERY complete: recovered={recoveredCount}/{pendingLayouts.Count}");
+            return recoveredCount;
+        }
+
+        private bool EnsurePendingScheduleOnlyLayout(Database outputDb, SourceFileInfo info)
+        {
+            try
+            {
+                using (var tr = outputDb.TransactionManager.StartTransaction())
+                {
+                    var btrId = GetLayoutBlockTableRecordId(outputDb, tr, info.LayoutName);
+                    if (btrId.IsNull)
+                        btrId = ReuseEmptyDefaultLayout(outputDb, tr, info.LayoutName);
+
+                    if (!btrId.IsNull)
+                    {
+                        PrepareRecoveredScheduleLayout(outputDb, tr, btrId, info);
+                        tr.Commit();
+                        AcadLogger.LogInfo($"SCHEDULE RECOVERY: preserved '{info.LayoutName}' via existing/default layout");
+                        return true;
+                    }
+
+                    tr.Commit();
+                }
+
+                if (!CreateLayoutOutsideTransaction(outputDb, info.LayoutName))
+                    return false;
+
+                using (var tr = outputDb.TransactionManager.StartTransaction())
+                {
+                    var btrId = GetLayoutBlockTableRecordId(outputDb, tr, info.LayoutName);
+                    if (btrId.IsNull)
+                    {
+                        AcadLogger.LogError($"SCHEDULE RECOVERY: layout '{info.LayoutName}' was created but cannot be found");
+                        tr.Commit();
+                        return false;
+                    }
+
+                    PrepareRecoveredScheduleLayout(outputDb, tr, btrId, info);
+                    tr.Commit();
+                }
+
+                AcadLogger.LogInfo($"SCHEDULE RECOVERY: preserved '{info.LayoutName}' via new layout");
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogError($"SCHEDULE RECOVERY failed for '{info.LayoutName}': {ex.Message}");
+                return false;
+            }
+        }
+
+        private void PrepareRecoveredScheduleLayout(Database outputDb, Transaction tr, ObjectId btrId, SourceFileInfo info)
+        {
+            var paperSpace = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForWrite);
+            var layout = (Layout)tr.GetObject(paperSpace.LayoutId, OpenMode.ForWrite);
+
+            if (info.PlotSettings != null)
+            {
+                var savedBtrId = layout.BlockTableRecordId;
+                var savedTabOrder = layout.TabOrder;
+                layout.CopyFrom(info.PlotSettings);
+                layout.BlockTableRecordId = savedBtrId;
+                layout.LayoutName = info.LayoutName;
+                layout.TabOrder = savedTabOrder;
+            }
+
+            if (!LayoutHasContent(paperSpace, tr))
+                AddSchedulePlaceholderContent(paperSpace, tr, info.LayoutName, layout);
+
+            AcadLogger.LogInfo(
+                $"SCHEDULE RECOVERY: layout='{info.LayoutName}', btr={btrId}, " +
+                $"paperSize=({layout.PlotPaperSize.X:F2},{layout.PlotPaperSize.Y:F2})");
+        }
+
+        private ObjectId GetLayoutBlockTableRecordId(Database db, Transaction tr, string layoutName)
+        {
+            var layoutDict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+            if (!layoutDict.Contains(layoutName))
+                return ObjectId.Null;
+
+            var layout = tr.GetObject(layoutDict.GetAt(layoutName), OpenMode.ForRead, false) as Layout;
+            if (layout == null || layout.BlockTableRecordId.IsNull)
+                return ObjectId.Null;
+
+            return layout.BlockTableRecordId;
+        }
+
+        private bool CreateLayoutOutsideTransaction(Database outputDb, string layoutName)
+        {
+            var previousWorkingDb = HostApplicationServices.WorkingDatabase;
+            try
+            {
+                HostApplicationServices.WorkingDatabase = outputDb;
+                var layoutId = LayoutManager.Current.CreateLayout(layoutName);
+                AcadLogger.LogInfo($"SCHEDULE RECOVERY: Created layout '{layoutName}' via LayoutManager outside transaction (Layout={layoutId})");
+                return !layoutId.IsNull;
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogError($"SCHEDULE RECOVERY: CreateLayout failed for '{layoutName}': {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                try
+                {
+                    HostApplicationServices.WorkingDatabase = previousWorkingDb;
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private SourceFileInfo CloneSourceInfo(SourceFileInfo source)
+        {
+            return new SourceFileInfo
+            {
+                FilePath = source.FilePath,
+                LayoutName = source.LayoutName,
+                MsOffset = source.MsOffset,
+                MsExtents = source.MsExtents,
+                ModelType = source.ModelType,
+                PlotSettings = source.PlotSettings
+            };
+        }
+
+        private ObjectId ReuseEmptyDefaultLayout(Database outputDb, Transaction outputTrans, string layoutName)
+        {
+            try
+            {
+                var layoutDict = (DBDictionary)outputTrans.GetObject(outputDb.LayoutDictionaryId, OpenMode.ForWrite);
+                if (layoutDict.Contains(layoutName))
+                    return ObjectId.Null;
+
+                foreach (DBDictionaryEntry entry in layoutDict)
+                {
+                    var candidate = outputTrans.GetObject(entry.Value, OpenMode.ForWrite, false) as Layout;
+                    if (candidate == null || candidate.ModelType || !IsDefaultLayoutName(candidate.LayoutName))
+                        continue;
+
+                    var candidateBtr = outputTrans.GetObject(candidate.BlockTableRecordId, OpenMode.ForWrite, false) as BlockTableRecord;
+                    if (candidateBtr == null || LayoutHasContent(candidateBtr, outputTrans))
+                        continue;
+
+                    var existingIds = new List<ObjectId>();
+                    foreach (ObjectId id in candidateBtr)
+                        existingIds.Add(id);
+
+                    foreach (var id in existingIds)
+                    {
+                        try
+                        {
+                            var entity = outputTrans.GetObject(id, OpenMode.ForWrite, false) as Entity;
+                            if (entity != null && !entity.IsErased)
+                                entity.Erase();
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    var oldName = candidate.LayoutName;
+                    candidate.LayoutName = layoutName;
+                    candidate.TabOrder = layoutDict.Count - 1;
+                    AcadLogger.LogInfo(
+                        $"Reused empty default layout '{oldName}' as '{layoutName}' (BTR={candidateBtr.ObjectId}, Layout={candidate.ObjectId})");
+                    return candidateBtr.ObjectId;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"ReuseEmptyDefaultLayout failed for '{layoutName}': {ex.Message}");
+            }
+
+            return ObjectId.Null;
+        }
+
+        private void AddSchedulePlaceholderContent(BlockTableRecord paperSpace, Transaction tr, string layoutName, Layout layout)
+        {
+            try
+            {
+                var paperWidth = layout != null && layout.PlotPaperSize.X > 1.0 ? layout.PlotPaperSize.X : PaperBackgroundFallbackWidth;
+                var paperHeight = layout != null && layout.PlotPaperSize.Y > 1.0 ? layout.PlotPaperSize.Y : PaperBackgroundFallbackHeight;
+                var height = Math.Max(2.5, Math.Min(paperWidth, paperHeight) * 0.012);
+
+                var text = new DBText
+                {
+                    TextString = layoutName,
+                    Height = height,
+                    Position = new Point3d(Math.Max(10.0, paperWidth * 0.025), Math.Max(10.0, paperHeight * 0.025), 0.0),
+                    Layer = "0"
+                };
+
+                paperSpace.AppendEntity(text);
+                tr.AddNewlyCreatedDBObject(text, true);
+                AcadLogger.LogWarning(
+                    $"Schedule-only sheet '{layoutName}' had no mergeable DWG geometry; added PaperSpace marker so the layout is preserved.");
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"AddSchedulePlaceholderContent failed for '{layoutName}': {ex.Message}");
             }
         }
 
@@ -2972,6 +3331,32 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
         {
             return string.Equals(layoutName, "Layout1", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(layoutName, "Layout2", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool LayoutHasContent(BlockTableRecord paperSpace, Transaction tr)
+        {
+            foreach (ObjectId id in paperSpace)
+            {
+                try
+                {
+                    var entity = tr.GetObject(id, OpenMode.ForRead, false) as Entity;
+                    if (entity == null || entity.IsErased)
+                        continue;
+
+                    if (entity is Viewport)
+                        continue;
+
+                    if (string.Equals(entity.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    return true;
+                }
+                catch
+                {
+                }
+            }
+
+            return false;
         }
 
         private int CountModelSpaceBackgrounds(Database db, Transaction tr)
