@@ -140,16 +140,11 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
-        public void SetExpectedSheetCount(int expectedSheetCount)
-        {
-            _expectedSheetCount = Math.Max(0, expectedSheetCount);
-        }
-
         /// <summary>
         /// Fix DWG files that may have empty ModelSpace (e.g., sheets with only schedules).
         /// Adds a tiny invisible point to ModelSpace to prevent CloneLayoutFromSource errors.
         /// </summary>
-        private async Task FixEmptyModelSpaceFilesAsync(List<string> dwgFiles, CancellationToken cancellationToken)
+        private void FixEmptyModelSpaceFiles(List<string> dwgFiles, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(_accoreconsolePath))
                 return;
@@ -200,7 +195,8 @@ namespace Licorp_CombineCAD.Services
                     {
                         if (process != null)
                         {
-                            await process.WaitForExitAsync(cancellationToken);
+                            // WaitForExitAsync not available in .NET Framework; use sync wait
+                            process.WaitForExit();
                         }
                     }
 
@@ -247,7 +243,7 @@ namespace Licorp_CombineCAD.Services
             }
 
             // Fix files that may have empty ModelSpace (sheets with only schedules)
-            await FixEmptyModelSpaceFilesAsync(validFiles, cancellationToken);
+            FixEmptyModelSpaceFiles(validFiles, cancellationToken);
 
             string configPath = null;
             string scriptPath = null;
