@@ -140,6 +140,79 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
+        public void SetExpectedSheetCount(int expectedSheetCount)
+        {
+            _expectedSheetCount = Math.Max(0, expectedSheetCount);
+        }
+
+        /// <summary>
+        /// Fix DWG files that may have empty ModelSpace (e.g., sheets with only schedules).
+        /// Adds a tiny invisible point to ModelSpace to prevent CloneLayoutFromSource errors.
+        /// </summary>
+        private async Task FixEmptyModelSpaceFilesAsync(List<string> dwgFiles, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(_accoreconsolePath))
+                return;
+
+            foreach (var file in dwgFiles)
+            {
+                if (!File.Exists(file))
+                    continue;
+
+                try
+                {
+                    var fi = new FileInfo(file);
+                    // Skip large files - they likely have content
+                    if (fi.Length > 10240)
+                        continue;
+
+                    Trace.WriteLine($"[Merge] Checking for empty ModelSpace: {Path.GetFileName(file)}");
+
+                    var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_FixEmpty_{Guid.NewGuid():N}.scr");
+                    var lines = new List<string>
+                    {
+                        "_SECURELOAD",
+                        "0",
+                        "OPEN",
+                        $"\"{file}\"",
+                        "POINT",
+                        "0,0,0",
+                        "",
+                        "ZOOM",
+                        "EXTENTS",
+                        "QSAVE",
+                        "QUIT",
+                        "Y"
+                    };
+                    File.WriteAllLines(scriptPath, lines);
+
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = _accoreconsolePath,
+                        Arguments = $"/i \"{file}\" /s \"{scriptPath}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+
+                    using (var process = Process.Start(startInfo))
+                    {
+                        if (process != null)
+                        {
+                            await process.WaitForExitAsync(cancellationToken);
+                        }
+                    }
+
+                    TryDeleteTempFile(scriptPath);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Merge] FixEmptyModelSpace failed for {file}: {ex.Message}");
+                }
+            }
+        }
+
         private async Task<bool> MergeAsync(
             List<string> dwgFiles,
             string outputPath,
@@ -172,6 +245,9 @@ namespace Licorp_CombineCAD.Services
                 Trace.WriteLine("[Merge] No valid source files");
                 return false;
             }
+
+            // Fix files that may have empty ModelSpace (sheets with only schedules)
+            await FixEmptyModelSpaceFilesAsync(validFiles, cancellationToken);
 
             string configPath = null;
             string scriptPath = null;

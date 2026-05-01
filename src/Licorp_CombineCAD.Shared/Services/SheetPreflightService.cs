@@ -22,7 +22,7 @@ namespace Licorp_CombineCAD.Services
 
             if (sheets == null || sheets.Count == 0)
             {
-                result.AddIssue(PreflightSeverity.Error, "", "", "No sheets selected.");
+                result.AddIssue(PreflightSeverity.Error, "", "", "Chưa chọn sheet nào.");
                 return result;
             }
 
@@ -57,7 +57,7 @@ namespace Licorp_CombineCAD.Services
                             PreflightSeverity.Error,
                             item.Sheet.SheetNumber,
                             item.Sheet.SheetName,
-                            "Generated DWG file name is empty. Check the file name template.");
+                            "Tên file DWG tạo ra bị trống. Kiểm tra mẫu tên file.");
                     }
                     continue;
                 }
@@ -70,7 +70,7 @@ namespace Licorp_CombineCAD.Services
                     PreflightSeverity.Error,
                     "",
                     "",
-                    string.Format("Duplicate DWG file name '{0}.dwg' from sheets: {1}", group.Key, sheetNames));
+                    string.Format("Trùng lặp tên file DWG '{0}.dwg' từ các sheet: {1}", group.Key, sheetNames));
             }
         }
 
@@ -86,13 +86,14 @@ namespace Licorp_CombineCAD.Services
                     PreflightSeverity.Error,
                     sheet.SheetNumber,
                     sheet.SheetName,
-                    "Cannot find this ViewSheet in the current Revit document.");
+                    "Không tìm thấy ViewSheet này trong tài liệu Revit hiện tại.");
                 return;
             }
 
             var titleBlockCount = CountTitleBlocks(viewSheet);
             var viewportCount = CountViewports(viewSheet);
             var rasterCount = CountElementsByCategory(viewSheet, BuiltInCategory.OST_RasterImages);
+            var scheduleCount = CountSchedules(viewSheet);
 
             if (titleBlockCount == 0)
             {
@@ -100,16 +101,18 @@ namespace Licorp_CombineCAD.Services
                     PreflightSeverity.Warning,
                     sheet.SheetNumber,
                     sheet.SheetName,
-                    "No title block detected. The merged layout may not have a sheet frame.");
+                    "Không tìm thấy khung tên. Bản vẽ ghép có thể không có khung sheet.");
             }
 
             if (viewportCount == 0)
             {
+                var hasOtherExportableContent = titleBlockCount > 0 || scheduleCount > 0 || rasterCount > 0;
+                var severity = hasOtherExportableContent ? PreflightSeverity.Info : PreflightSeverity.Warning;
                 result.AddIssue(
-                    PreflightSeverity.Warning,
+                    severity,
                     sheet.SheetNumber,
                     sheet.SheetName,
-                    "No model viewport detected. The sheet will still be exported for title blocks, schedules, images, and annotations.");
+                    "Không phát hiện viewport mô hình. Sheet vẫn sẽ được xuất cho khung tên, bảng biểu, hình ảnh và chú thích.");
             }
 
             if (rasterCount > 0)
@@ -118,7 +121,7 @@ namespace Licorp_CombineCAD.Services
                     PreflightSeverity.Warning,
                     sheet.SheetNumber,
                     sheet.SheetName,
-                    string.Format("{0} raster image(s) detected. Revit may export these as external image references.", rasterCount));
+                    string.Format("Phát hiện {0} hình ảnh raster. Revit có thể xuất chúng dưới dạng tham chiếu hình ảnh bên ngoài.", rasterCount));
             }
         }
 
@@ -148,6 +151,22 @@ namespace Licorp_CombineCAD.Services
             catch (Exception ex)
             {
                 Trace.WriteLine("[Preflight] Viewport count failed: " + ex.Message);
+                return 0;
+            }
+        }
+
+        private int CountSchedules(ViewSheet viewSheet)
+        {
+            try
+            {
+                return new FilteredElementCollector(_document, viewSheet.Id)
+                    .OfCategory(BuiltInCategory.OST_Schedules)
+                    .WhereElementIsNotElementType()
+                    .Count();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine("[Preflight] Schedule count failed: " + ex.Message);
                 return 0;
             }
         }
