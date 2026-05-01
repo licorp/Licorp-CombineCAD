@@ -595,26 +595,24 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
 
             try
             {
-                var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_FixExport_{Guid.NewGuid():N}.scr");
-                // Script to switch to ModelSpace, add a point, save, quit
-                var lines = new List<string>
-                {
-                    "TILEMODE",
-                    "1",
-                    "POINT",
-                    "0,0,0",
-                    "ZOOM",
-                    "ALL",
-                    "QSAVE",
-                    "QUIT",
-                    "Y"
-                };
-                File.WriteAllLines(scriptPath, lines);
+                var lispPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Fix_{Guid.NewGuid():N}.lsp");
+                // LISP: Switch to PaperSpace (layout), add a tiny viewport, save, quit
+                var lisp = @"
+(defun c:LicorpFix ()
+  (command ""_.TILEMODE"" ""0"")
+  (command ""_.VIEWPORT"" ""3"" ""0,0,0"" ""0.001,0.001,0"")
+  (command ""_.ZOOM"" ""EXTENTS"")
+  (command ""_.QSAVE"")
+  (command ""_.QUIT"" ""Y"")
+)
+(LicorpFix)
+";
+                File.WriteAllText(lispPath, lisp);
 
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = accoreconsolePath,
-                    Arguments = $"/i \"{filePath}\" /s \"{scriptPath}\"",
+                    Arguments = $"/i \"{filePath}\" /l \"{lispPath}\"",
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
@@ -629,8 +627,8 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                     }
                 }
 
-                TryDeleteTempFile(scriptPath);
-                Trace.WriteLine($"[DwgExport] Fixed empty ModelSpace: {Path.GetFileName(filePath)}");
+                TryDeleteTempFile(lispPath);
+                Trace.WriteLine($"[DwgExport] Fixed layout (added viewport): {Path.GetFileName(filePath)}");
             }
             catch (Exception ex)
             {
