@@ -158,21 +158,18 @@ namespace Licorp_CombineCAD.Services
                 {
                     var fi = new FileInfo(file);
                     // Skip large files - they likely have content
-                    if (fi.Length > 10240)
+                    if (fi.Length > 5120)  // Lower threshold to 5KB
                         continue;
 
                     Trace.WriteLine($"[Merge] Checking for empty ModelSpace: {Path.GetFileName(file)}");
 
                     var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_FixEmpty_{Guid.NewGuid():N}.scr");
+                    // Script to add a point to ModelSpace and save
+                    // Note: /i already opens the file, so no OPEN command needed
                     var lines = new List<string>
                     {
-                        "_SECURELOAD",
-                        "0",
-                        "OPEN",
-                        $"\"{file}\"",
                         "POINT",
                         "0,0,0",
-                        "",
                         "ZOOM",
                         "EXTENTS",
                         "QSAVE",
@@ -195,12 +192,12 @@ namespace Licorp_CombineCAD.Services
                     {
                         if (process != null)
                         {
-                            // WaitForExitAsync not available in .NET Framework; use sync wait
                             process.WaitForExit();
                         }
                     }
 
                     TryDeleteTempFile(scriptPath);
+                    Trace.WriteLine($"[Merge] Fixed empty ModelSpace: {Path.GetFileName(file)}");
                 }
                 catch (Exception ex)
                 {

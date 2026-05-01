@@ -94,6 +94,9 @@ namespace Licorp_CombineCAD.Services
             var viewportCount = CountViewports(viewSheet);
             var rasterCount = CountElementsByCategory(viewSheet, BuiltInCategory.OST_RasterImages);
             var scheduleCount = CountSchedules(viewSheet);
+            var textCount = CountElementsByCategory(viewSheet, BuiltInCategory.OST_TextNotes);
+            var dimensionCount = CountElementsByCategory(viewSheet, BuiltInCategory.OST_Dimensions);
+            var otherAnnotationCount = CountOtherAnnotations(viewSheet);
 
             if (titleBlockCount == 0)
             {
@@ -106,7 +109,12 @@ namespace Licorp_CombineCAD.Services
 
             if (viewportCount == 0)
             {
-                var hasOtherExportableContent = titleBlockCount > 0 || scheduleCount > 0 || rasterCount > 0;
+                var hasOtherExportableContent = titleBlockCount > 0 
+                    || scheduleCount > 0 
+                    || rasterCount > 0 
+                    || textCount > 0 
+                    || dimensionCount > 0 
+                    || otherAnnotationCount > 0;
                 var severity = hasOtherExportableContent ? PreflightSeverity.Info : PreflightSeverity.Warning;
                 result.AddIssue(
                     severity,
@@ -118,10 +126,10 @@ namespace Licorp_CombineCAD.Services
             if (rasterCount > 0)
             {
                 result.AddIssue(
-                    PreflightSeverity.Warning,
+                    PreflightSeverity.Info,
                     sheet.SheetNumber,
                     sheet.SheetName,
-                    string.Format("Phát hiện {0} hình ảnh raster. Revit có thể xuất chúng dưới dạng tham chiếu hình ảnh bên ngoài.", rasterCount));
+                    string.Format("{0} raster image(s) detected. Revit may export these as external image references.", rasterCount));
             }
         }
 
@@ -167,6 +175,42 @@ namespace Licorp_CombineCAD.Services
             catch (Exception ex)
             {
                 Trace.WriteLine("[Preflight] Schedule count failed: " + ex.Message);
+                return 0;
+            }
+        }
+
+        private int CountOtherAnnotations(ViewSheet viewSheet)
+        {
+            try
+            {
+                // Count other annotation elements: tags, symbols, detail items, etc.
+                var annotationCategories = new[]
+                {
+                    BuiltInCategory.OST_DetailComponents,
+                    BuiltInCategory.OST_GenericAnnotation,
+                    BuiltInCategory.OST_MultiCategoryTags
+                };
+
+                int total = 0;
+                foreach (var cat in annotationCategories)
+                {
+                    try
+                    {
+                        total += new FilteredElementCollector(_document, viewSheet.Id)
+                            .OfCategory(cat)
+                            .WhereElementIsNotElementType()
+                            .Count();
+                    }
+                    catch
+                    {
+                        // Skip categories that might not be available
+                    }
+                }
+                return total;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine("[Preflight] Other annotation count failed: " + ex.Message);
                 return 0;
             }
         }
