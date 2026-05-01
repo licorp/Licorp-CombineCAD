@@ -254,6 +254,12 @@ namespace Licorp_CombineCAD.Services
                             }
                         }
 
+                        // Fix empty ModelSpace for sheets with no viewports (schedules only)
+                        if (sheet.HasNoView && !string.IsNullOrEmpty(filePath))
+                        {
+                            FixEmptyModelSpaceFile(filePath);
+                        }
+
                         if (!string.IsNullOrEmpty(filePath))
                         {
                             result.ExportedFiles.Add(filePath);
@@ -556,15 +562,80 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                 var enumType = typeof(DWGExportOptions).Assembly
                     .GetTypes()
                     .FirstOrDefault(t => t.Name == enumTypeName && t.IsEnum);
-
+                
                 if (enumType != null)
                 {
                     return Enum.Parse(enumType, valueName);
                 }
             }
             catch { }
-
+            
             return null;
+        }
+
+        private void TryDeleteTempFile(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return;
+            try { if (File.Exists(path)) File.Delete(path); }
+            catch { }
+        }
+
+        private void FixEmptyModelSpaceFile(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                return;
+
+            var accoreconsolePath = AutoCadLocatorService.FindAcCoreConsole();
+            if (string.IsNullOrEmpty(accoreconsolePath))
+            {
+                Trace.WriteLine($"[DwgExport] AcCoreConsole not found, skipping fix for {Path.GetFileName(filePath)}");
+                return;
+            }
+
+            try
+            {
+                var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_FixExport_{Guid.NewGuid():N}.scr");
+                // Script to switch to ModelSpace, add a point, save, quit
+                var lines = new List<string>
+                {
+                    "TILEMODE",
+                    "1",
+                    "POINT",
+                    "0,0,0",
+                    "ZOOM",
+                    "ALL",
+                    "QSAVE",
+                    "QUIT",
+                    "Y"
+                };
+                File.WriteAllLines(scriptPath, lines);
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = accoreconsolePath,
+                    Arguments = $"/i \"{filePath}\" /s \"{scriptPath}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using (var process = Process.Start(startInfo))
+                {
+                    if (process != null)
+                    {
+                        process.WaitForExit();
+                    }
+                }
+
+                TryDeleteTempFile(scriptPath);
+                Trace.WriteLine($"[DwgExport] Fixed empty ModelSpace: {Path.GetFileName(filePath)}");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[DwgExport] Fix failed for {filePath}: {ex.Message}");
+            }
         }
     }
 

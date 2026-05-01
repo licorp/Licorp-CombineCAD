@@ -157,17 +157,16 @@ namespace Licorp_CombineCAD.Services
                 try
                 {
                     var fi = new FileInfo(file);
-                    // Skip large files - they likely have content
-                    if (fi.Length > 5120)  // Lower threshold to 5KB
-                        continue;
-
-                    Trace.WriteLine($"[Merge] Checking for empty ModelSpace: {Path.GetFileName(file)}");
+                    
+                    // Always try to fix - schedule-only DWG files can be any size
+                    Trace.WriteLine($"[Merge] Fixing empty ModelSpace: {Path.GetFileName(file)} ({fi.Length} bytes)");
 
                     var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_FixEmpty_{Guid.NewGuid():N}.scr");
-                    // Script to add a point to ModelSpace and save
-                    // Note: /i already opens the file, so no OPEN command needed
+                    // Script to switch to ModelSpace, add a point, save
                     var lines = new List<string>
                     {
+                        "TILEMODE",
+                        "1",
                         "POINT",
                         "0,0,0",
                         "ZOOM",
