@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Licorp CombineCAD</Name>
+    <Assembly>C:\ProgramData\Autodesk\ApplicationPlugins\Licorp_CombineCAD\R2021\Licorp_CombineCAD.dll</Assembly>
+    <AddInId>F7A3B2C1-4D5E-6F78-9A0B-C1D2E3F4A5B6</AddInId>
+    <FullClassName>Licorp_CombineCAD.App</FullClassName>
+    <VendorId>LICORP</VendorId>
+    <VendorDescription>Licorp - Export Revit sheets to DWG with multi-layout merge</VendorDescription>
+  </AddIn>
+</RevitAddIns>

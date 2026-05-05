@@ -15,7 +15,7 @@ namespace Licorp_MergeSheets
         private const string PaperBackgroundLayerName = "LICORP_PAPER_BACKGROUND";
         private const double PaperBackgroundFallbackWidth = 1066.8;
         private const double PaperBackgroundFallbackHeight = 762.0;
-        private const double ModelSpaceSheetMinGap = 100.0;
+        private const double ModelSpaceSheetMinGap = 25.0;
         private const int AutoCadLayoutNameMaxLength = 31;
         
         // Track ModelSpace offset for each source file
@@ -701,12 +701,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                                         $"paperExtentEntities={paperExtentEntityCount}, placement={FormatVector(placement)}");
 
                                     var placedIds = new List<ObjectId>();
-                                    int backgroundCount = CreateModelSpaceSheetBackground(
-                                        outputDb,
-                                        outputTrans,
-                                        modelSpace,
-                                        sourcePaperBounds,
-                                        placedIds);
+                                    int backgroundCount = 0;
 
                                     int paperCloneCount = ClonePaperEntitiesToModelSpace(
                                         sourceDb,
@@ -744,7 +739,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                                         $"bakedModelClones={bakedCount}, moved={movedCount}, finalOriginX={nextSheetX:F2}, " +
                                         $"size=({sheetWidth:F2},{sheetHeight:F2})");
 
-                                    double gap = Math.Max(ModelSpaceSheetMinGap, sheetWidth * 0.05);
+                                    double gap = Math.Max(ModelSpaceSheetMinGap, sheetWidth * 0.02);
                                     nextSheetX += sheetWidth + gap;
                                     sourceTrans.Commit();
                                 }
