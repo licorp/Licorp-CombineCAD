@@ -18,6 +18,7 @@ namespace Licorp_CombineCAD.Services
         private readonly string _accoreconsolePath;
         private readonly string _acadPath;
         private readonly string _pluginPath;
+        private readonly bool _allowFullAutoCadFallback;
 
         private string _verticalAlign = "Top";
         private string _dwgVersion = "Current";
@@ -38,6 +39,13 @@ namespace Licorp_CombineCAD.Services
 
             var enginePath = !string.IsNullOrEmpty(_accoreconsolePath) ? _accoreconsolePath : _acadPath;
             _pluginPath = Path.Combine(pluginDir, "Contents", GetPluginSubFolder(enginePath), "Licorp_MergeSheets.dll");
+
+            // Full AutoCAD fallback can pop UI and is less deterministic with script completion.
+            // Default to disabled unless explicitly enabled via env var.
+            _allowFullAutoCadFallback = string.Equals(
+                Environment.GetEnvironmentVariable("LICORP_ALLOW_FULL_AUTOCAD_FALLBACK"),
+                "1",
+                StringComparison.Ordinal);
         }
 
         public bool IsAvailable => !string.IsNullOrEmpty(_accoreconsolePath) || !string.IsNullOrEmpty(_acadPath);
@@ -399,6 +407,12 @@ namespace Licorp_CombineCAD.Services
                     return false;
                 }
 
+                if (!_allowFullAutoCadFallback)
+                {
+                    Trace.WriteLine("[Merge] AcCoreConsole failed; Full AutoCAD fallback is disabled.");
+                    return false;
+                }
+
                 Trace.WriteLine("[Merge] AcCoreConsole failed; trying Full AutoCAD fallback when available.");
             }
 
@@ -455,8 +469,9 @@ namespace Licorp_CombineCAD.Services
                 FileName = _acadPath,
                 Arguments = $"/nologo \"{inputPath}\" /b \"{scriptPath}\"",
                 UseShellExecute = false,
-                CreateNoWindow = false,
-                WindowStyle = ProcessWindowStyle.Minimized,
+                // Keep Full AutoCAD fallback as unobtrusive as possible when AcCoreConsole is unavailable/fails.
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
@@ -507,13 +522,10 @@ namespace Licorp_CombineCAD.Services
                         Trace.WriteLine($"[ACAD-RUN] {engineName} stderr: {TrimForTrace(errors)}");
 
                     if (process.ExitCode != 0)
-                    {
-                        LastError = $"{engineName} exited with code {process.ExitCode}.";
-                        return false;
-                    }
-                }
+                        Trace.WriteLine($"[ACAD-RUN] {engineName} exited with non-zero code {process.ExitCode}; evaluating status/output before failing.");
 
-                return EvaluateStatusFile(engineName, outputPath, statusPath);
+                    return await EvaluateMergeRunResultAsync(engineName, process.ExitCode, outputPath, statusPath, cancellationToken);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -527,38 +539,122 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
-        private bool EvaluateStatusFile(string engineName, string outputPath, string statusPath)
+        private async Task<bool> EvaluateMergeRunResultAsync(
+            string engineName,
+            int exitCode,
+            string expectedOutputPath,
+            string statusPath,
+            CancellationToken cancellationToken)
         {
             Trace.WriteLine($"[ACAD-RUN] evaluate-status engine={engineName}, statusPath={statusPath}");
-            var status = ReadStatus(statusPath);
-            if (status != null)
+
+            string deferredFailureMessage = null;
+
+            for (int i = 0; i < 20; i++)
             {
-                _lastRunReturnedPluginStatus = true;
-                LastLogPath = status.LogPath;
-                LastError = status.Success ? null : status.Message;
-                Trace.WriteLine($"[ACAD-RUN] plugin-status success={status.Success}, message={status.Message}, logPath={status.LogPath}");
+                cancellationToken.ThrowIfCancellationRequested();
 
-                if (!status.Success)
-                    return false;
-
-                if (!IsUsableOutput(outputPath))
+                var status = ReadStatus(statusPath);
+                if (status != null)
                 {
-                    LastError = $"{engineName} reported success, but output DWG is missing or too small.";
-                    return false;
+                    _lastRunReturnedPluginStatus = true;
+                    LastLogPath = status.LogPath;
+
+                    var finalOutputPath = !string.IsNullOrWhiteSpace(status.OutputPath)
+                        ? status.OutputPath
+                        : expectedOutputPath;
+
+                    Trace.WriteLine($"[ACAD-RUN] plugin-status success={status.Success}, message={status.Message}, outputPath={status.OutputPath}, logPath={status.LogPath}");
+
+                    if (status.Success)
+                    {
+                        if (IsLikelyValidCombinedDwg(finalOutputPath, out var reason))
+                        {
+                            LastError = null;
+                            return true;
+                        }
+
+                        // Status success can arrive slightly before DWG file flush/handle release.
+                        // Defer failure and keep polling for a short period.
+                        deferredFailureMessage = $"{engineName} reported success, but output DWG appears invalid: {reason}";
+                        Trace.WriteLine($"[ACAD-RUN] status success but output not ready yet (attempt {i + 1}/20): {reason}");
+                    }
+                    else
+                    {
+                        LastError = string.IsNullOrWhiteSpace(status.Message)
+                            ? $"{engineName} reported failure status."
+                            : status.Message;
+
+                        Trace.WriteLine($"[ACAD-RUN] plugin reported failure status, stopping evaluation. lastError={LastError}");
+                        return false;
+                    }
                 }
 
+                if (IsLikelyValidCombinedDwg(expectedOutputPath, out _))
+                {
+                    LastError = null;
+                    Trace.WriteLine($"[ACAD-RUN] status missing/delayed, but output DWG exists and looks valid: {expectedOutputPath}");
+                    return true;
+                }
+
+                await Task.Delay(500, cancellationToken);
+            }
+
+            // Fallback: if plugin log says success and provides output path, trust it when status path mismatches.
+            if (TryRecoverSuccessFromLatestLog(expectedOutputPath, out var recoveredOutputPath))
+            {
+                LastError = null;
+                Trace.WriteLine($"[ACAD-RUN] recovered success from merge log; output={recoveredOutputPath}");
                 return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(deferredFailureMessage))
+            {
+                LastError = deferredFailureMessage;
+                return false;
             }
 
             LastLogPath = GetLatestMergeLogPath();
-            if (IsUsableOutput(outputPath))
+            LastError = $"{engineName} exited with code {exitCode} but no valid status/output was detected.";
+            return false;
+        }
+
+        private bool TryRecoverSuccessFromLatestLog(string expectedOutputPath, out string recoveredOutputPath)
+        {
+            recoveredOutputPath = null;
+
+            try
             {
-                Trace.WriteLine($"[Merge] Status file missing, but output DWG exists: {outputPath}");
+                var logPath = GetLatestMergeLogPath();
+                if (string.IsNullOrWhiteSpace(logPath) || !File.Exists(logPath))
+                    return false;
+
+                LastLogPath = logPath;
+                var lines = File.ReadAllLines(logPath);
+                if (lines.Length == 0)
+                    return false;
+
+                var hasSuccessLine = lines.Any(l => l.IndexOf("finalStatus success=True", StringComparison.OrdinalIgnoreCase) >= 0)
+                    || lines.Any(l => l.IndexOf("Merge Completed Successfully", StringComparison.OrdinalIgnoreCase) >= 0);
+                if (!hasSuccessLine)
+                    return false;
+
+                var outputLine = lines.LastOrDefault(l => l.IndexOf("Output file:", StringComparison.OrdinalIgnoreCase) >= 0);
+                var outputFromLog = outputLine == null
+                    ? null
+                    : outputLine.Substring(outputLine.IndexOf("Output file:", StringComparison.OrdinalIgnoreCase) + "Output file:".Length).Trim();
+
+                var candidate = !string.IsNullOrWhiteSpace(outputFromLog) ? outputFromLog : expectedOutputPath;
+                if (!IsLikelyValidCombinedDwg(candidate, out _))
+                    return false;
+
+                recoveredOutputPath = candidate;
                 return true;
             }
-
-            LastError = $"{engineName} finished but did not produce a valid combined DWG.";
-            return false;
+            catch
+            {
+                return false;
+            }
         }
 
         private MergeStatusDto ReadStatus(string statusPath)
@@ -578,17 +674,48 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
-        private bool IsUsableOutput(string outputPath)
+        private bool IsLikelyValidCombinedDwg(string outputPath, out string reason)
         {
+            reason = null;
+
             try
             {
                 if (string.IsNullOrWhiteSpace(outputPath) || !File.Exists(outputPath))
+                {
+                    reason = "Output file does not exist.";
                     return false;
+                }
 
-                return new FileInfo(outputPath).Length > 4096;
+                var fileInfo = new FileInfo(outputPath);
+                if (fileInfo.Length < 4096)
+                {
+                    reason = $"Output file too small: {fileInfo.Length} bytes.";
+                    return false;
+                }
+
+                using (var fs = new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    var header = new byte[6];
+                    var read = fs.Read(header, 0, header.Length);
+                    if (read < 6)
+                    {
+                        reason = "Cannot read DWG header.";
+                        return false;
+                    }
+
+                    var signature = System.Text.Encoding.ASCII.GetString(header);
+                    if (!signature.StartsWith("AC", StringComparison.Ordinal))
+                    {
+                        reason = $"Unexpected DWG signature: {signature}";
+                        return false;
+                    }
+                }
+
+                return true;
             }
-            catch
+            catch (Exception ex)
             {
+                reason = ex.Message;
                 return false;
             }
         }
@@ -678,6 +805,7 @@ namespace Licorp_CombineCAD.Services
         {
             public bool Success { get; set; }
             public string Message { get; set; }
+            public string OutputPath { get; set; }
             public string LogPath { get; set; }
         }
 
