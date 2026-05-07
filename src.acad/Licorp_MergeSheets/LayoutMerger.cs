@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using System.Diagnostics;
@@ -56,8 +57,11 @@ namespace Licorp_MergeSheets
                 AcadLogger.LogInfo($"Using base file: {baseFile}");
 
                 var outputDb = new Database(false, true);
-                _msOffsets.Clear();
-                _currentMsXOffset = 0.0;
+                        _msOffsets.Clear();
+                        _currentMsXOffset = 0.0;
+                        // Default to live viewport behavior (Mlabs-like): keep viewport links to ModelSpace.
+                        bool keepViewportLive = !string.Equals(config.ViewportMode, "Baked", StringComparison.OrdinalIgnoreCase);
+                        AcadLogger.LogInfo($"Viewport handling: mode={(keepViewportLive ? "Live" : "Baked")}");
                 var sourceInfos = new List<SourceFileInfo>();
                 var pendingScheduleOnlyLayouts = new List<SourceFileInfo>();
                 var usedLayoutNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -109,16 +113,25 @@ namespace Licorp_MergeSheets
                                 GetLayoutModelViewExtents(outputDb, trans, firstLayout, baseExtents, "Base layout"));
                             var firstBtr = (BlockTableRecord)trans.GetObject(firstLayout.BlockTableRecordId, OpenMode.ForWrite);
                             var firstViewports = CollectModelViewportInfos(trans, firstBtr, $"BASE usable viewports: {firstLayoutName}");
-                            int baseBakedCount = BakeModelViewsToPaperSpace(
-                                outputDb, trans, outputDb, trans, firstBtr, firstViewports, firstLayoutName);
-                            int baseErasedViewportCount = baseBakedCount > 0
-                                ? EraseAllLayoutViewports(trans, firstBtr, firstLayoutName)
-                                : 0;
-                            if (baseBakedCount == 0)
-                                AcadLogger.LogWarning($"BASE: Paper bake produced no entities; keeping original viewport(s) for '{firstLayoutName}'");
-                            AcadLogger.LogInfo(
-                                $"BASE: Baked {baseBakedCount} model entity clone(s) to PaperSpace and erased " +
-                                $"{baseErasedViewportCount} viewport(s) for '{firstLayoutName}'");
+                            int baseBakedCount = 0;
+                            int baseErasedViewportCount = 0;
+                            if (keepViewportLive)
+                            {
+                                AcadLogger.LogInfo($"BASE: Keep live viewport mode enabled; skip paper bake/erase for '{firstLayoutName}'");
+                            }
+                            else
+                            {
+                                baseBakedCount = BakeModelViewsToPaperSpace(
+                                    outputDb, trans, outputDb, trans, firstBtr, firstViewports, firstLayoutName);
+                                baseErasedViewportCount = baseBakedCount > 0
+                                    ? EraseAllLayoutViewports(trans, firstBtr, firstLayoutName)
+                                    : 0;
+                                if (baseBakedCount == 0)
+                                    AcadLogger.LogWarning($"BASE: Paper bake produced no entities; keeping original viewport(s) for '{firstLayoutName}'");
+                                AcadLogger.LogInfo(
+                                    $"BASE: Baked {baseBakedCount} model entity clone(s) to PaperSpace and erased " +
+                                    $"{baseErasedViewportCount} viewport(s) for '{firstLayoutName}'");
+                            }
                             var ps = new PlotSettings(firstLayout.ModelType);
                             ps.CopyFrom(firstLayout);
                             sourceInfos.Add(new SourceFileInfo
@@ -257,85 +270,6 @@ modelType = srcLayout.ModelType;
                                 _currentMsXOffset = msOffset.X + sourceVisibleExtents.MaxPoint.X + GetLayoutGap(sourceVisibleExtents);
                                 AcadLogger.LogInfo($"GD1: Updated next visible min X to {_currentMsXOffset:F2}");
 
-                                // === GIAI DOAN 2: Clone source Layout object directly ===
-                                // This keeps AutoCAD's internal Layout/PaperSpace/Viewport wiring intact.
-                                var shouldUseDirectLayoutClone = UseDirectLayoutClone();
-
-                                if (shouldUseDirectLayoutClone)
-                                {
-                                    var srcBtrIdDirect = srcLayout.BlockTableRecordId;
-                                    var srcBtrDirect = (BlockTableRecord)srcTrans.GetObject(srcBtrIdDirect, OpenMode.ForRead);
-                                    LogViewportCollection(srcTrans, srcBtrDirect, $"SRC before layout clone: {desiredName}");
-                                    var sourceViewportsDirect = CollectModelViewportInfos(srcTrans, srcBtrDirect, $"SRC usable viewports: {desiredName}");
-
-                                    var destBtrIdDirect = CloneLayoutFromSource(sourceDb, outputDb, srcTrans, outputTrans, srcLayout, desiredName);
-                                    if (destBtrIdDirect.IsNull)
-                                    {
-                                        AcadLogger.LogWarning(
-                                            $"GD2: Direct layout clone failed for '{desiredName}'. " +
-                                            "Falling back to manual layout creation.");
-                                    }
-                                    else
-                                    {
-                                        var destBtrDirect = (BlockTableRecord)outputTrans.GetObject(destBtrIdDirect, OpenMode.ForWrite);
-                                        var destLayoutDirect = (Layout)outputTrans.GetObject(destBtrDirect.LayoutId, OpenMode.ForWrite);
-                                        AcadLogger.LogInfo(
-                                            $"GD2: Cloned layout object for '{desiredName}', source usable viewport count={sourceViewportsDirect.Count}, " +
-                                            $"paperSize=({destLayoutDirect.PlotPaperSize.X:F2},{destLayoutDirect.PlotPaperSize.Y:F2})");
-
-                                        LogViewportCollection(outputTrans, destBtrDirect, $"DEST after layout clone before fix: {desiredName}");
-
-                                        int bakedCountDirect = BakeModelViewsToPaperSpace(
-                                            sourceDb, srcTrans, outputDb, outputTrans, destBtrDirect, sourceViewportsDirect, desiredName);
-                                        bool scheduleHasPaperContent =
-                                            srcStats.EntityCount == 0 &&
-                                            LayoutHasContent(destBtrDirect, outputTrans);
-                                        int erasedViewportCountDirect = bakedCountDirect > 0 || scheduleHasPaperContent
-                                            ? EraseAllLayoutViewports(outputTrans, destBtrDirect, desiredName)
-                                            : 0;
-                                        if (bakedCountDirect == 0)
-                                        {
-                                            if (scheduleHasPaperContent)
-                                            {
-                                                AcadLogger.LogInfo(
-                                                    $"GD2: '{desiredName}' is schedule-only with PaperSpace content; removed viewport(s) so the layout behaves like a normal sheet tab.");
-                                            }
-                                            else
-                                            {
-                                                AcadLogger.LogWarning($"GD2: Paper bake produced no entities; keeping original viewport(s) for '{desiredName}'");
-                                            }
-                                        }
-                                        AcadLogger.LogInfo(
-                                            $"GD2: Baked {bakedCountDirect} model entity clone(s) to PaperSpace and erased " +
-                                            $"{erasedViewportCountDirect} viewport(s) for '{desiredName}'");
-
-                                        if (srcStats.EntityCount == 0 && !LayoutHasContent(destBtrDirect, outputTrans))
-                                        {
-                                            AddSchedulePlaceholderContent(destBtrDirect, outputTrans, desiredName, destLayoutDirect);
-                                        }
-
-                                        LogViewportCollection(outputTrans, destBtrDirect, $"DEST after paper bake: {desiredName}");
-
-                                        sourceInfos.Add(new SourceFileInfo
-                                        {
-                                            FilePath = source.Path,
-                                            LayoutName = desiredName,
-                                            MsOffset = msOffset,
-                                            MsExtents = srcExtents,
-                                            ModelType = modelType,
-                                            PlotSettings = savedPlotSettings
-                                        });
-
-                                        outputTrans.Commit();
-                                        srcTrans.Commit();
-
-                                        clonedCount++;
-                                        AcadLogger.LogInfo($"Successfully cloned layout '{desiredName}'");
-                                        fileIndex++;
-                                        continue;
-                                    }
-                                }
-
                                 // === GIAI ĐOẠN 2: Tạo Layout + Clone PaperSpace ===
                                 // Tạo layout mới
 var destBtrId = CreateNewLayoutInDb(outputDb, outputTrans, desiredName);
@@ -367,12 +301,7 @@ var destBtrId = CreateNewLayoutInDb(outputDb, outputTrans, desiredName);
             var savedBtrId = destLayout.BlockTableRecordId;
             var savedTabOrder = destLayout.TabOrder;
             AcadLogger.LogInfo($"GD2: Source PlotOrigin=({savedPlotSettings.PlotOrigin.X:F2},{savedPlotSettings.PlotOrigin.Y:F2})");
-            destLayout.CopyFrom(savedPlotSettings);
-            AcadLogger.LogInfo($"GD2: Dest paper size=({destLayout.PlotPaperSize.X:F2},{destLayout.PlotPaperSize.Y:F2})");
-            destLayout.BlockTableRecordId = savedBtrId;
-            destLayout.LayoutName = desiredName;
-            destLayout.TabOrder = savedTabOrder;
-            AcadLogger.LogInfo($"GD2: Copied plot settings for '{desiredName}'");
+            ApplyLayoutPlotSettingsSafely(destLayout, savedPlotSettings, desiredName, savedBtrId, savedTabOrder, "GD2");
 
             // Clone PaperSpace entities (now with correct paper size)
             var srcBtrId = srcLayout.BlockTableRecordId;
@@ -380,29 +309,65 @@ var destBtrId = CreateNewLayoutInDb(outputDb, outputTrans, desiredName);
                                 LogViewportCollection(srcTrans, srcBtr, $"SRC before PS clone: {desiredName}");
                                 var sourceViewports = CollectModelViewportInfos(srcTrans, srcBtr, $"SRC usable viewports: {desiredName}");
                                 
-                                var psIds = new ObjectIdCollection();
-                                int psViewportSkippedCount = 0;
-                                int psViewportClonedCount = 0;
+                                // PRE-SCAN pass 1: compute maxViewArea across all raw model VPs
+                                // so IsUtilityViewport can correctly identify the 12×9 default VP.
+                                double srcMaxViewArea = 0.0;
                                 foreach (ObjectId id in srcBtr)
                                 {
-                                    var sourceViewport = srcTrans.GetObject(id, OpenMode.ForRead, false) as Viewport;
-                                    if (sourceViewport != null)
+                                    try
                                     {
-                                        if (IsUtilityViewport(sourceViewport, 0.0))
+                                        var v = srcTrans.GetObject(id, OpenMode.ForRead, false) as Viewport;
+                                        if (IsRawModelViewport(v))
+                                            srcMaxViewArea = Math.Max(srcMaxViewArea, GetViewportViewArea(v));
+                                    }
+                                    catch { }
+                                }
+
+                                // PRE-SCAN pass 2: build psIds, excluding utility viewports.
+                                // psIds.Add is inside try so errored entities are never silently added.
+                                var psIds = new ObjectIdCollection();
+                                int skippedUtilityCount = 0;
+                                foreach (ObjectId id in srcBtr)
+                                {
+                                    try
+                                    {
+                                        var sourceVp = srcTrans.GetObject(id, OpenMode.ForRead, false) as Viewport;
+                                        if (sourceVp != null)
                                         {
-                                            psViewportSkippedCount++;
+                                            if (keepViewportLive)
+                                            {
+                                                skippedUtilityCount++;
+                                                AcadLogger.LogInfo(
+                                                    $"GD2: Skip source viewport before manual recreate: {desiredName} " +
+                                                    $"handle={sourceVp.Handle} paperSize=({sourceVp.Width:F2},{sourceVp.Height:F2}) " +
+                                                    $"viewHeight={sourceVp.ViewHeight:F2} scale={sourceVp.CustomScale:F8}");
+                                                continue;
+                                            }
+
+                                            if (IsUtilityViewport(sourceVp, srcMaxViewArea))
+                                            {
+                                                skippedUtilityCount++;
+                                                AcadLogger.LogInfo(
+                                                    $"GD2: Skip default utility viewport before clone: {desiredName} " +
+                                                    $"handle={sourceVp.Handle} paperSize=({sourceVp.Width:F2},{sourceVp.Height:F2}) " +
+                                                    $"viewHeight={sourceVp.ViewHeight:F2} scale={sourceVp.CustomScale:F8} " +
+                                                    $"viewArea={GetViewportViewArea(sourceVp):F2} maxArea={srcMaxViewArea:F2}");
+                                                continue; // do NOT add to psIds
+                                            }
+
                                             AcadLogger.LogInfo(
-                                                $"GD2: Skip default utility viewport before clone: {desiredName} " +
-                                                $"handle={sourceViewport.Handle} paperCenter={FormatPoint(sourceViewport.CenterPoint)} " +
-                                                $"paperSize=({sourceViewport.Width:F2},{sourceViewport.Height:F2}) " +
-                                                $"viewHeight={sourceViewport.ViewHeight:F2} scale={sourceViewport.CustomScale:F8}");
-                                            continue;
+                                                $"GD2: Clone source viewport: {desiredName} " +
+                                                $"handle={sourceVp.Handle} paperSize=({sourceVp.Width:F2},{sourceVp.Height:F2}) " +
+                                                $"viewHeight={sourceVp.ViewHeight:F2} scale={sourceVp.CustomScale:F8}");
                                         }
 
-                                        psViewportClonedCount++;
+                                        psIds.Add(id); // only reached for non-utility entities
                                     }
-
-                                    psIds.Add(id);
+                                    catch (System.Exception scanEx)
+                                    {
+                                        AcadLogger.LogWarning($"GD2: Failed to scan entity {id} in '{desiredName}': {scanEx.Message}");
+                                        // entity NOT added to psIds
+                                    }
                                 }
 
                                 var psIdMap = new IdMapping();
@@ -419,17 +384,37 @@ var destBtrId = CreateNewLayoutInDb(outputDb, outputTrans, desiredName);
                                             psClonedCount++;
                                     }
 
-AcadLogger.LogInfo($"GD2: Cloned {psClonedCount}/{psIds.Count} PaperSpace entities to layout '{desiredName}'");
-            }
-            AcadLogger.LogInfo($"GD2: Included {psViewportClonedCount} source viewport entities, skipped {psViewportSkippedCount} default utility viewport(s); usable source viewport count={sourceViewports.Count}");
+                                    AcadLogger.LogInfo($"GD2: Cloned {psClonedCount}/{psIds.Count} (including {sourceViewports.Count} viewport(s), skipped {skippedUtilityCount} utility) PaperSpace entities to layout '{desiredName}'");
+                                }
+                                AcadLogger.LogInfo($"GD2: Viewport clone strategy: {(keepViewportLive ? "Manual recreate" : "WblockClone with ViewCenter adjustment")}");
 
-            // === GIAI ĐOẠN 2b: Fix cloned viewports after plot settings applied ===
-            LogViewportCollection(outputTrans, destBtr, $"DEST after PS clone: {desiredName}");
-
-            // === GIAI ĐOẠN 2c: Fix viewport ViewCenter ===
-                                int vpFixedCount = TranslateLayoutViewports(outputTrans, destBtr, desiredName, msOffset);
-                                AcadLogger.LogInfo($"GD2: Fixed {vpFixedCount} cloned viewport(s) for '{desiredName}'");
-                                LogViewportCollection(outputTrans, destBtr, $"DEST after plot settings: {desiredName}");
+                                LogViewportCollection(outputTrans, destBtr, $"DEST after PS clone: {desiredName}");
+                                if (keepViewportLive)
+                                {
+                                    // Recreate viewport entities directly in the destination layout.
+                                    // WblockClone leaves viewport Number=-1 pseudo-on objects that stay blank.
+                                    int vpFixedCount = RecreateLayoutViewports(
+                                        outputTrans, destBtr, sourceViewports, desiredName, msOffset);
+                                    AcadLogger.LogInfo(
+                                        $"GD2: Keep live viewport mode enabled; recreated {vpFixedCount} viewport(s) for '{desiredName}'");
+                                    LogLayoutDiag(desiredName, "ManualLayoutClone", sourceViewports.Count, vpFixedCount, 0, 0, msOffset, true);
+                                }
+                                else
+                                {
+                                    // === GIAI ĐOẠN 2b: Bake model into PaperSpace + erase viewports ===
+                                    int bakedCount = BakeModelViewsToPaperSpace(
+                                        sourceDb, srcTrans, outputDb, outputTrans, destBtr, sourceViewports, desiredName);
+                                    int erasedViewportCount = 0;
+                                    if (sourceViewports.Count > 0)
+                                    {
+                                        erasedViewportCount = EraseAllLayoutViewports(outputTrans, destBtr, desiredName);
+                                    }
+                                    AcadLogger.LogInfo(
+                                        $"GD2: Baked {bakedCount} model entity clone(s) to PaperSpace and erased " +
+                                        $"{erasedViewportCount} viewport(s) for '{desiredName}'");
+                                    LogLayoutDiag(desiredName, "ManualLayoutClone", sourceViewports.Count, 0, bakedCount, erasedViewportCount, msOffset, false);
+                                }
+                                LogViewportCollection(outputTrans, destBtr, $"DEST after paper bake: {desiredName}");
 
                                 if (srcStats.EntityCount == 0 && !LayoutHasContent(destBtr, outputTrans))
                                 {
@@ -471,6 +456,20 @@ AcadLogger.LogInfo($"GD2: Cloned {psClonedCount}/{psIds.Count} PaperSpace entiti
                     var dwgVersion = GetDwgVersion(config.DwgVersion);
                     outputDb.SaveAs(config.OutputPath, dwgVersion);
                     AcadLogger.LogInfo($"Saved to: {config.OutputPath}");
+
+                    // Deferred post-save regen: open the output DWG AFTER the command stack
+                    // is clear (Application.Idle), activate each layout so AutoCAD builds
+                    // viewport display lists, then re-save. This avoids the fatal crash that
+                    // occurs when calling DocumentManager.Open() synchronously inside a command.
+                    var outputPathForRegen = config.OutputPath;
+                    var layoutNamesForRegen = sourceInfos.Select(s => s.LayoutName).ToList();
+                    AcadLogger.LogInfo($"POST-SAVE REGEN: scheduling deferred layout regen for {layoutNamesForRegen.Count} layout(s) via Application.Idle");
+                    SchedulePostSaveRegen(outputPathForRegen);
+
+                    // Prevent leaked DisposableWrapper(finalizer) objects from piling up
+                    // across large merge jobs.
+                    DisposePlotSettings(sourceInfos);
+                    DisposePlotSettings(pendingScheduleOnlyLayouts);
                 }
 
                 AcadLogger.LogSection("MergeToMultiLayout Complete");
@@ -482,6 +481,55 @@ AcadLogger.LogInfo($"GD2: Cloned {psClonedCount}/{psIds.Count} PaperSpace entiti
                 AcadLogger.LogError($"Stack: {ex.StackTrace}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Schedules a deferred regen of the output DWG via Application.Idle (fires after
+        /// the current command stack unwinds). Opens the saved file, runs REGENALL to build
+        /// viewport display lists, then QSAVE to persist them. This avoids the fatal crash
+        /// caused by calling DocumentManager.Open synchronously inside a command.
+        /// </summary>
+        private void SchedulePostSaveRegen(string outputPath)
+        {
+            EventHandler idleHandler = null;
+            idleHandler = (sender, e) =>
+            {
+                try
+                {
+                    Application.Idle -= idleHandler;
+                    AcadLogger.LogInfo($"POST-SAVE REGEN [Idle]: opening '{outputPath}'");
+
+                    var dm = Application.DocumentManager;
+                    Document regenDoc = null;
+                    try
+                    {
+                        regenDoc = dm.Open(outputPath, false);
+                        if (regenDoc == null)
+                        {
+                            AcadLogger.LogWarning("POST-SAVE REGEN [Idle]: document open returned null");
+                            return;
+                        }
+
+                        dm.MdiActiveDocument = regenDoc;
+
+                        // REGENALL forces AutoCAD to compute display lists for all viewports.
+                        // QSAVE persists the display lists so the file renders on next open.
+                        regenDoc.SendStringToExecute("_.REGENALL\n_.QSAVE\n", true, false, false);
+                        AcadLogger.LogInfo("POST-SAVE REGEN [Idle]: sent REGENALL + QSAVE");
+                    }
+                    catch (System.Exception regenEx)
+                    {
+                        AcadLogger.LogWarning($"POST-SAVE REGEN [Idle]: failed: {regenEx.Message}");
+                    }
+                }
+                catch (System.Exception outerEx)
+                {
+                    try { Application.Idle -= idleHandler; } catch { }
+                    AcadLogger.LogWarning($"POST-SAVE REGEN [Idle]: outer error: {outerEx.Message}");
+                }
+            };
+
+            Application.Idle += idleHandler;
         }
 
         public bool MergeToSingleLayout(MergeConfig config)
@@ -1527,6 +1575,56 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             return entityCount;
         }
 
+        /// <summary>
+        /// Legacy helper kept for diagnostics. Do NOT call from merge command flow.
+        /// Opening documents and SendStringToExecute from this context is unstable in some
+        /// AutoCAD runtimes and can crash with access violation/stack overflow.
+        /// </summary>
+        private void PostSaveRegenAllViewports(string outputPath, DwgVersion dwgVersion)
+        {
+            try
+            {
+                var docMgr = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager;
+
+                AcadLogger.LogInfo($"POST-SAVE REGEN: Opening '{System.IO.Path.GetFileName(outputPath)}' in AutoCAD editor to register viewport numbers...");
+
+                // Open the saved file as a live AutoCAD document.
+                // When AutoCAD opens a DWG, it runs its full initialization which includes
+                // assigning viewport numbers to all VP#=-1 viewports.
+                Autodesk.AutoCAD.ApplicationServices.Document mergedDoc =
+                    docMgr.Open(outputPath, false);
+
+                // Lock the document before sending commands
+                using (mergedDoc.LockDocument())
+                {
+                    // Count layouts for logging
+                    int layoutCount = 0;
+                    using (var tr = mergedDoc.Database.TransactionManager.StartTransaction())
+                    {
+                        var layouts = (DBDictionary)tr.GetObject(mergedDoc.Database.LayoutDictionaryId, OpenMode.ForRead);
+                        layoutCount = layouts.Count - 1; // subtract Model
+                        tr.Commit();
+                    }
+
+                    AcadLogger.LogInfo($"POST-SAVE REGEN: Sending REGENALL + QSAVE for {layoutCount} layout(s)...");
+
+                    // REGENALL regenerates all viewports in all layouts,
+                    // assigning proper VP numbers and rendering model content.
+                    // QSAVE saves the updated state back to disk.
+                    mergedDoc.SendStringToExecute("REGENALL\n", true, false, false);
+                    mergedDoc.SendStringToExecute("_QSAVE\n", true, false, false);
+
+                    AcadLogger.LogInfo($"POST-SAVE REGEN: REGENALL + QSAVE queued successfully for '{System.IO.Path.GetFileName(outputPath)}'");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                // Non-fatal: the file is saved correctly, just viewports may need manual REGENALL
+                AcadLogger.LogWarning($"POST-SAVE REGEN: Could not auto-open file for REGENALL: {ex.Message}. " +
+                    $"Please open the output file in AutoCAD and run REGENALL once to display viewport content.");
+            }
+        }
+
         private int RegenerateLayouts(Database db, string mode)
         {
             var layoutInfos = new List<LayoutRegenInfo>();
@@ -1669,16 +1767,169 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                             AcadLogger.LogWarning($"REGENERATING LAYOUT: could not activate '{layoutName}': {currentEx.Message}");
                         }
 
-                        using (var tr = db.TransactionManager.StartTransaction())
+                        // === PASS 1: Force-register all model viewports with AutoCAD layout system ===
+                        // WblockCloned viewports have VP#-1 (unregistered) because the On state
+                        // set during clone was done without TileMode=false + CurrentLayout context.
+                        // Here TileMode=false is already set and CurrentLayout is active, so
+                        // toggling Off->On forces AutoCAD to assign real VP numbers (VP#2+).
+                        // This is REQUIRED for viewports to render model content on file open.
+                        using (var trActivate = db.TransactionManager.StartTransaction())
                         {
-                            var layouts = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
-                            if (!layouts.Contains(layoutName))
+                            var layoutsDict = (DBDictionary)trActivate.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+                            if (!layoutsDict.Contains(layoutName))
                             {
                                 AcadLogger.LogWarning($"REGENERATING LAYOUT: layout '{layoutName}' disappeared before regen");
-                                tr.Commit();
+                                trActivate.Commit();
                                 continue;
                             }
 
+                            var layoutObj = (Layout)trActivate.GetObject(layoutsDict.GetAt(layoutName), OpenMode.ForRead);
+                            var paperSpaceW = (BlockTableRecord)trActivate.GetObject(layoutObj.BlockTableRecordId, OpenMode.ForWrite);
+                            int vpActivated = 0;
+
+                            // First pass: compute maxViewArea for IsUtilityViewport
+                            double regenMaxViewArea = 0.0;
+                            var regenVpCandidates = new List<Viewport>();
+                            foreach (ObjectId id in paperSpaceW)
+                            {
+                                try
+                                {
+                                    var vp = trActivate.GetObject(id, OpenMode.ForRead, false) as Viewport;
+                                    if (!IsRawModelViewport(vp)) continue;
+                                    regenVpCandidates.Add(vp);
+                                    regenMaxViewArea = Math.Max(regenMaxViewArea, GetViewportViewArea(vp));
+                                }
+                                catch { }
+                            }
+
+                            foreach (var vpRo in regenVpCandidates)
+                            {
+                                try
+                                {
+                                    if (IsUtilityViewport(vpRo, regenMaxViewArea))
+                                    {
+                                        AcadLogger.LogInfo(
+                                            $"REGEN VP skip utility: {layoutName} handle={vpRo.Handle} " +
+                                            $"paperSize=({vpRo.Width:F2},{vpRo.Height:F2}) scale={vpRo.CustomScale:F8}");
+                                        continue;
+                                    }
+
+                                    var vp = trActivate.GetObject(vpRo.ObjectId, OpenMode.ForWrite, false) as Viewport;
+                                    if (vp == null || vp.IsErased) continue;
+
+                                    // CRITICAL: Always toggle Off→On regardless of current On state.
+                                    // A viewport with VP#-1 is unregistered; toggling forces AutoCAD
+                                    // to properly register it and assign a real viewport number.
+                                    // Without this, the viewport is blank when the DWG is opened.
+                                    int vpNumBefore = vp.Number;
+                                    bool wasOn = vp.On;
+                                    bool offFailed = false;
+                                    try
+                                    {
+                                        vp.On = false; // turn off first to clear stale state
+                                    }
+                                    catch (System.Exception offEx)
+                                    {
+                                        offFailed = true;
+                                        AcadLogger.LogWarning(
+                                            $"REGEN VP Off failed: {layoutName} handle={vp.Handle}: {offEx.Message}");
+                                    }
+
+                                    if (offFailed)
+                                    {
+                                        // WblockCloned viewport is stuck in "pseudo-on" state.
+                                        // Only a recreate (erase + new Viewport) in the correct
+                                        // TileMode=false + CurrentLayout context forces AutoCAD
+                                        // to assign a real VP number.
+                                        AcadLogger.LogInfo(
+                                            $"REGEN VP recreate: {layoutName} handle={vp.Handle} " +
+                                            $"paperCenter={FormatPoint(vp.CenterPoint)} paperSize=({vp.Width:F2},{vp.Height:F2}) " +
+                                            $"viewCenter={FormatPoint(vp.ViewCenter)} viewHeight={vp.ViewHeight:F2} scale={vp.CustomScale:F8}");
+                                        try
+                                        {
+                                            // Snapshot all properties before erase
+                                            var snapCenter    = vp.CenterPoint;
+                                            var snapWidth     = vp.Width;
+                                            var snapHeight    = vp.Height;
+                                            var snapViewCtr   = vp.ViewCenter;
+                                            var snapViewTgt   = vp.ViewTarget;
+                                            var snapViewDir   = vp.ViewDirection;
+                                            var snapViewH     = vp.ViewHeight;
+                                            var snapScale     = vp.CustomScale;
+                                            var snapTwist     = vp.TwistAngle;
+                                            var snapLocked    = vp.Locked;
+
+                                            vp.Erase();
+
+                                            var newVp = new Viewport();
+                                            paperSpaceW.AppendEntity(newVp);
+                                            trActivate.AddNewlyCreatedDBObject(newVp, true);
+
+                                            newVp.CenterPoint  = snapCenter;
+                                            newVp.Width        = snapWidth;
+                                            newVp.Height       = snapHeight;
+                                            newVp.ViewTarget   = snapViewTgt;
+                                            newVp.ViewDirection = snapViewDir.Length == 0.0 ? Vector3d.ZAxis : snapViewDir;
+                                            newVp.ViewCenter   = snapViewCtr;
+                                            newVp.ViewHeight   = snapViewH;
+                                            if (snapScale > 0.0) newVp.CustomScale = snapScale;
+                                            newVp.TwistAngle   = snapTwist;
+                                            newVp.PerspectiveOn = false;
+                                            newVp.FrontClipOn  = false;
+                                            newVp.BackClipOn   = false;
+                                            newVp.Locked       = snapLocked;
+
+                                            try
+                                            {
+                                                newVp.On = false;
+                                                newVp.On = true;
+                                            }
+                                            catch (System.Exception onRecEx)
+                                            {
+                                                AcadLogger.LogWarning(
+                                                    $"REGEN VP recreate On failed: {layoutName}: {onRecEx.Message}");
+                                            }
+
+                                            vpActivated++;
+                                            AcadLogger.LogInfo(
+                                                $"REGEN VP recreated: {layoutName} newHandle={newVp.Handle} " +
+                                                $"vpNumAfter={newVp.Number}");
+                                        }
+                                        catch (System.Exception recreateEx)
+                                        {
+                                            AcadLogger.LogWarning(
+                                                $"REGEN VP recreate error: {layoutName}: {recreateEx.Message}");
+                                        }
+                                        continue;
+                                    }
+
+                                    try
+                                    {
+                                        vp.On = true; // re-activate → assigns proper VP number
+                                        vpActivated++;
+                                        AcadLogger.LogInfo(
+                                            $"REGEN VP registered: {layoutName} handle={vp.Handle} " +
+                                            $"wasOn={wasOn} vpNumBefore={vpNumBefore} vpNumAfter={vp.Number}");
+                                    }
+                                    catch (System.Exception onEx)
+                                    {
+                                        AcadLogger.LogWarning(
+                                            $"REGEN VP On failed: {layoutName} handle={vp.Handle}: {onEx.Message}");
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            if (vpActivated > 0)
+                                AcadLogger.LogInfo($"REGEN VP: registered {vpActivated} viewport(s) for '{layoutName}'");
+
+                            trActivate.Commit();
+                        }
+
+                        // === PASS 2: Count entities and measure extents ===
+                        using (var tr = db.TransactionManager.StartTransaction())
+                        {
+                            var layouts = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
                             var layout = (Layout)tr.GetObject(layouts.GetAt(layoutName), OpenMode.ForRead);
                             var paperSpace = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
                             paperEntityCount = 0;
@@ -1860,62 +2111,6 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
     return null;
 }
 
-        private bool UseDirectLayoutClone()
-        {
-            return true;
-        }
-
-        private ObjectId CloneLayoutFromSource(Database sourceDb, Database outputDb, Transaction srcTrans, Transaction outputTrans, Layout srcLayout, string desiredName)
-        {
-            try
-            {
-                var outputLayouts = (DBDictionary)outputTrans.GetObject(outputDb.LayoutDictionaryId, OpenMode.ForWrite);
-                if (outputLayouts.Contains(desiredName))
-                {
-                    AcadLogger.LogWarning($"CloneLayoutFromSource: layout '{desiredName}' already exists");
-                    return ObjectId.Null;
-                }
-
-                var layoutForClone = srcLayout;
-                var originalName = srcLayout.LayoutName;
-                if (!string.Equals(originalName, desiredName, StringComparison.OrdinalIgnoreCase))
-                {
-                    layoutForClone = (Layout)srcTrans.GetObject(srcLayout.ObjectId, OpenMode.ForWrite);
-                    layoutForClone.LayoutName = desiredName;
-                    AcadLogger.LogInfo($"GD2: Renamed source layout for clone '{originalName}' -> '{desiredName}'");
-                }
-
-                var layoutIds = new ObjectIdCollection { layoutForClone.ObjectId };
-                var layoutMap = new IdMapping();
-                sourceDb.WblockCloneObjects(layoutIds, outputDb.LayoutDictionaryId, layoutMap, DuplicateRecordCloning.Ignore, false);
-
-                ObjectId destLayoutId = ObjectId.Null;
-                if (layoutMap.Contains(layoutForClone.ObjectId) && !layoutMap[layoutForClone.ObjectId].Value.IsNull)
-                    destLayoutId = layoutMap[layoutForClone.ObjectId].Value;
-
-                if (destLayoutId.IsNull && outputLayouts.Contains(desiredName))
-                    destLayoutId = outputLayouts.GetAt(desiredName);
-
-                if (destLayoutId.IsNull)
-                {
-                    AcadLogger.LogError($"CloneLayoutFromSource: cloned layout '{desiredName}' was not found in output layout dictionary");
-                    return ObjectId.Null;
-                }
-
-                var destLayout = (Layout)outputTrans.GetObject(destLayoutId, OpenMode.ForWrite);
-                destLayout.LayoutName = desiredName;
-                destLayout.TabOrder = outputLayouts.Count - 1;
-
-                var destBtr = (BlockTableRecord)outputTrans.GetObject(destLayout.BlockTableRecordId, OpenMode.ForWrite);
-                AcadLogger.LogInfo($"GD2: Layout object cloned '{desiredName}' (BTR={destBtr.ObjectId}, Layout={destLayoutId})");
-                return destBtr.ObjectId;
-            }
-            catch (System.Exception ex)
-            {
-                AcadLogger.LogError($"CloneLayoutFromSource failed for '{desiredName}': {ex.Message}");
-                return ObjectId.Null;
-            }
-        }
 
         private int BakeModelViewsToPaperSpace(
             Database sourceDb,
@@ -2442,10 +2637,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             {
                 var savedBtrId = layout.BlockTableRecordId;
                 var savedTabOrder = layout.TabOrder;
-                layout.CopyFrom(info.PlotSettings);
-                layout.BlockTableRecordId = savedBtrId;
-                layout.LayoutName = info.LayoutName;
-                layout.TabOrder = savedTabOrder;
+                ApplyLayoutPlotSettingsSafely(layout, info.PlotSettings, info.LayoutName, savedBtrId, savedTabOrder, "Pending");
             }
 
             if (!LayoutHasContent(paperSpace, tr))
@@ -2939,51 +3131,210 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             return viewports;
         }
 
-        private int RecreateLayoutViewports(Transaction trans, BlockTableRecord paperSpace, IReadOnlyList<ViewportInfo> sourceViewports, string layoutName, Vector3d modelOffset)
+        /// <summary>
+        /// Adjusts ViewCenter of WblockCloned viewports to point at offset ModelSpace region.
+        /// Unlike RecreateLayoutViewports (which creates new VP entities), this preserves
+        /// the viewport's internal rendering state from the source file.
+        /// </summary>
+        private int TranslateClonedViewports(Transaction trans, BlockTableRecord paperSpace, IReadOnlyList<ViewportInfo> sourceViewports, string layoutName, Vector3d modelOffset)
         {
-            int createdCount = 0;
+            int fixedCount = 0;
+            int skippedCount = 0;
+            int utilityCandidates = 0;
 
-            foreach (var sourceViewport in sourceViewports)
+            double maxViewArea = 0.0;
+            var allVps = new List<Viewport>();
+            foreach (ObjectId id in paperSpace)
             {
                 try
                 {
-                    var vp = new Viewport();
-                    paperSpace.AppendEntity(vp);
-                    trans.AddNewlyCreatedDBObject(vp, true);
+                    var vp = trans.GetObject(id, OpenMode.ForRead, false) as Viewport;
+                    if (vp == null || vp.IsErased) continue;
+                    if (!IsRawModelViewport(vp)) continue;
+                    allVps.Add(vp);
+                    maxViewArea = Math.Max(maxViewArea, GetViewportViewArea(vp));
+                }
+                catch { }
+            }
 
-                    vp.CenterPoint = sourceViewport.CenterPoint;
-                    vp.Width = sourceViewport.Width;
-                    vp.Height = sourceViewport.Height;
-                    vp.ViewDirection = sourceViewport.ViewDirection.Length == 0.0
-                        ? Vector3d.ZAxis
-                        : sourceViewport.ViewDirection;
-                    vp.ViewTarget = sourceViewport.ViewTarget;
-                    vp.TwistAngle = sourceViewport.TwistAngle;
-                    if (sourceViewport.CustomScale > 0.0)
-                        vp.CustomScale = sourceViewport.CustomScale;
-                    vp.ViewHeight = sourceViewport.ViewHeight;
+            foreach (var vpRo in allVps)
+            {
+                try
+                {
+                    if (IsUtilityViewport(vpRo, maxViewArea))
+                    {
+                        utilityCandidates++;
+                        continue;
+                    }
 
+                    var vp = trans.GetObject(vpRo.ObjectId, OpenMode.ForWrite, false) as Viewport;
+                    if (vp == null || vp.IsErased)
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    LogViewportState($"FIX before: {layoutName}", vp);
+
+                    bool wasOn = vp.On;
+                    var oldCenter = vp.ViewCenter;
+                    var oldTarget = vp.ViewTarget;
+
+                    // Pan viewport window to follow moved ModelSpace geometry.
+                    // Keep ViewTarget stable; shift ViewCenter by modelOffset in DCS.
+                    // This matches the legacy stable path used in FixViewportsSimple/GetViewCenterOffset.
                     var centerOffset = GetViewCenterOffset(vp, modelOffset);
-                    var newCenter = new Point2d(
-                        sourceViewport.ViewCenter.X + centerOffset.X,
-                        sourceViewport.ViewCenter.Y + centerOffset.Y);
-                    vp.ViewCenter = newCenter;
-                    vp.On = true;
-                    vp.Locked = sourceViewport.Locked;
+                    vp.ViewCenter = new Point2d(
+                        oldCenter.X + centerOffset.X,
+                        oldCenter.Y + centerOffset.Y);
 
+                    // Disable perspective / clipping that may hide content
+                    vp.PerspectiveOn = false;
+                    vp.FrontClipOn = false;
+                    vp.BackClipOn = false;
+
+                    // DO NOT set vp.On here. WblockCloned viewports already inherit On=True
+                    // from the source. Setting On=true without TileMode=false + CurrentLayout
+                    // context creates a "pseudo-on" broken state that causes eNotApplicable
+                    // when RegenerateLayouts later attempts the Off→On registration toggle.
+                    // RegenerateLayouts is the sole owner of On-state management.
+
+                    var newCenter = vp.ViewCenter;
+                    var newTarget = vp.ViewTarget;
                     AcadLogger.LogInfo(
-                        $"RECREATE viewport: {layoutName} sourceHandle={sourceViewport.SourceId.Handle} " +
-                        $"paperCenter={FormatPoint(sourceViewport.CenterPoint)} paperSize=({sourceViewport.Width:F2},{sourceViewport.Height:F2}) " +
-                        $"sourceCenter={FormatPoint(sourceViewport.ViewCenter)} newCenter={FormatPoint(newCenter)} " +
-                        $"centerDelta=({centerOffset.X:F4},{centerOffset.Y:F4}) modelOffset={FormatVector(modelOffset)} " +
-                        $"sourceOn={sourceViewport.On} newOn={vp.On} locked={vp.Locked}");
-                    LogViewportState($"RECREATE after: {layoutName}", vp);
-                    createdCount++;
+                        $"FIX delta: {layoutName} VP#{vp.Number} " +
+                        $"oldCenter={FormatPoint(oldCenter)} newCenter={FormatPoint(newCenter)} " +
+                        $"centerDelta=({centerOffset.X:F4},{centerOffset.Y:F4}) " +
+                        $"target={FormatPoint(oldTarget)}->{FormatPoint(newTarget)} " +
+                        $"modelOffset={FormatVector(modelOffset)} on={wasOn}(preserved-for-regen) " +
+                        $"visibleBefore={FormatExtents(GetViewportViewExtents(oldCenter, vp))} " +
+                        $"visibleAfter={FormatExtents(GetViewportViewExtents(newCenter, vp))}");
+
+                    LogViewportState($"FIX after: {layoutName}", vp);
+                    fixedCount++;
                 }
                 catch (System.Exception ex)
                 {
-                    AcadLogger.LogWarning($"RECREATE viewport error: {layoutName}: {ex.Message}");
+                    AcadLogger.LogWarning($"FIX viewport error: {layoutName}: {ex.Message}");
                 }
+            }
+
+            AcadLogger.LogInfo($"FIX summary: {layoutName} fixed={fixedCount}, skipped={skippedCount}, utilityCandidates={utilityCandidates}, modelOffset={FormatVector(modelOffset)}");
+            return fixedCount;
+        }
+
+        private int RecreateLayoutViewports(Transaction trans, BlockTableRecord paperSpace, IReadOnlyList<ViewportInfo> sourceViewports, string layoutName, Vector3d modelOffset)
+        {
+            int createdCount = 0;
+            var db = paperSpace.Database;
+
+            // === FIX eNotInPaperspace: AutoCAD requires TileMode=false and the layout
+            // to be current before vp.On = true can succeed ===
+            var previousWorkingDb = HostApplicationServices.WorkingDatabase;
+            bool previousTileMode = db.TileMode;
+            try
+            {
+                HostApplicationServices.WorkingDatabase = db;
+                db.TileMode = false;
+                try
+                {
+                    LayoutManager.Current.CurrentLayout = layoutName;
+                }
+                catch (System.Exception layoutEx)
+                {
+                    AcadLogger.LogWarning($"RECREATE viewport: could not activate layout '{layoutName}': {layoutEx.Message}");
+                }
+            }
+            catch (System.Exception modeEx)
+            {
+                AcadLogger.LogWarning($"RECREATE viewport: could not switch to PaperSpace mode: {modeEx.Message}");
+            }
+
+            try
+            {
+                foreach (var sourceViewport in sourceViewports)
+                {
+                    try
+                    {
+                        var vp = new Viewport();
+                        paperSpace.AppendEntity(vp);
+                        trans.AddNewlyCreatedDBObject(vp, true);
+
+                        vp.CenterPoint = sourceViewport.CenterPoint;
+                        vp.Width = sourceViewport.Width;
+                        vp.Height = sourceViewport.Height;
+                        vp.ViewDirection = sourceViewport.ViewDirection.Length == 0.0
+                            ? Vector3d.ZAxis
+                            : sourceViewport.ViewDirection;
+
+                        vp.TwistAngle = sourceViewport.TwistAngle;
+                        vp.ViewHeight = sourceViewport.ViewHeight;
+                        if (sourceViewport.CustomScale > 0.0)
+                            vp.CustomScale = sourceViewport.CustomScale;
+
+                        // Shift the viewport window to the moved ModelSpace geometry.
+                        // Using ViewCenter matches cloned-entity behavior and the extents math above.
+                        var centerOffset = GetViewCenterOffset(vp, modelOffset);
+                        vp.ViewTarget = sourceViewport.ViewTarget;
+                        vp.ViewCenter = new Point2d(
+                            sourceViewport.ViewCenter.X + centerOffset.X,
+                            sourceViewport.ViewCenter.Y + centerOffset.Y);
+
+                        // Disable clipping that may hide content
+                        vp.PerspectiveOn = false;
+                        vp.FrontClipOn = false;
+                        vp.BackClipOn = false;
+
+                        try
+                        {
+                            // Force Off->On to encourage AutoCAD viewport registration (VP# assignment).
+                            vp.On = false;
+                            vp.On = true;
+                        }
+                        catch (System.Exception onEx)
+                        {
+                            AcadLogger.LogWarning($"RECREATE viewport: vp.On failed for '{layoutName}': {onEx.Message}; viewport will be OFF");
+                        }
+
+                        vp.Locked = sourceViewport.Locked;
+
+                        // Compute expected WCS visible range for logging
+                        var srcWcsCenter = new Point2d(
+                            sourceViewport.ViewTarget.X + sourceViewport.ViewCenter.X,
+                            sourceViewport.ViewTarget.Y + sourceViewport.ViewCenter.Y);
+                        var newWcsCenter = new Point2d(
+                            vp.ViewTarget.X + vp.ViewCenter.X,
+                            vp.ViewTarget.Y + vp.ViewCenter.Y);
+                        double halfW = vp.ViewHeight * (vp.Width / vp.Height) / 2.0;
+                        double halfH = vp.ViewHeight / 2.0;
+
+                        AcadLogger.LogInfo(
+                            $"RECREATE viewport: {layoutName} sourceHandle={sourceViewport.SourceId.Handle} " +
+                            $"paperCenter={FormatPoint(sourceViewport.CenterPoint)} paperSize=({sourceViewport.Width:F2},{sourceViewport.Height:F2}) " +
+                            $"srcViewCenter={FormatPoint(sourceViewport.ViewCenter)} viewCenter={FormatPoint(vp.ViewCenter)} " +
+                            $"srcViewTarget={FormatPoint(sourceViewport.ViewTarget)} viewTarget={FormatPoint(vp.ViewTarget)} " +
+                            $"srcWcsCenter=({srcWcsCenter.X:F2},{srcWcsCenter.Y:F2}) " +
+                            $"wcsCenter=({newWcsCenter.X:F2},{newWcsCenter.Y:F2}) " +
+                            $"wcsVisible=({newWcsCenter.X - halfW:F2},{newWcsCenter.Y - halfH:F2}) to ({newWcsCenter.X + halfW:F2},{newWcsCenter.Y + halfH:F2}) " +
+                            $"modelOffset={FormatVector(modelOffset)} sourceOn={sourceViewport.On} newOn={vp.On} vpNumber={vp.Number} " +
+                            $"nonRectClip={vp.NonRectClipOn} locked={vp.Locked}");
+                        LogViewportState($"RECREATE after: {layoutName}", vp);
+                        createdCount++;
+                    }
+                    catch (System.Exception ex)
+                    {
+                        AcadLogger.LogWarning($"RECREATE viewport error: {layoutName}: {ex.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                // Restore previous database context
+                try
+                {
+                    HostApplicationServices.WorkingDatabase = previousWorkingDb;
+                }
+                catch { }
             }
 
             return createdCount;
@@ -3049,9 +3400,8 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
 
                     if (IsUtilityViewport(vp, maxViewArea))
                     {
-                        AcadLogger.LogInfo($"FIX erase utility viewport: {layoutName} VP#{vp.Number} handle={vp.Handle} paperSize=({vp.Width:F2},{vp.Height:F2}) viewHeight={vp.ViewHeight:F2} scale={vp.CustomScale:F8} viewArea={GetViewportViewArea(vp):F2} maxArea={maxViewArea:F2}");
-                        vp.Erase();
-                        erasedUtilityCount++;
+                        skippedCount++;
+                        AcadLogger.LogInfo($"FIX skip utility viewport: {layoutName} VP#{vp.Number} handle={vp.Handle} paperSize=({vp.Width:F2},{vp.Height:F2}) viewHeight={vp.ViewHeight:F2} scale={vp.CustomScale:F8} viewArea={GetViewportViewArea(vp):F2} maxArea={maxViewArea:F2}");
                         continue;
                     }
 
@@ -3067,16 +3417,33 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                     var oldCenter = vp.ViewCenter;
                     var oldTarget = vp.ViewTarget;
                     bool oldOn = vp.On;
-                    var centerOffset = GetViewCenterOffset(vp, modelOffset);
+                    bool applyCenterFallback =
+                        Math.Abs(vp.ViewDirection.X) < 1e-6 &&
+                        Math.Abs(vp.ViewDirection.Y) < 1e-6;
                     bool wasLocked = vp.Locked;
 
                     if (wasLocked)
                         vp.Locked = false;
 
-                    var newCenter = new Point2d(
-                        vp.ViewCenter.X + centerOffset.X,
-                        vp.ViewCenter.Y + centerOffset.Y);
-                    vp.ViewCenter = newCenter;
+                    vp.ViewTarget = new Point3d(
+                        vp.ViewTarget.X + modelOffset.X,
+                        vp.ViewTarget.Y + modelOffset.Y,
+                        vp.ViewTarget.Z + modelOffset.Z);
+
+                    var centerOffset = new Vector2d(0.0, 0.0);
+                    var newCenter = vp.ViewCenter;
+                    if (applyCenterFallback)
+                    {
+                        centerOffset = GetViewCenterOffset(vp, modelOffset);
+                        newCenter = new Point2d(
+                            vp.ViewCenter.X + centerOffset.X,
+                            vp.ViewCenter.Y + centerOffset.Y);
+                        vp.ViewCenter = newCenter;
+                    }
+
+                    vp.PerspectiveOn = false;
+                    vp.FrontClipOn = false;
+                    vp.BackClipOn = false;
 
                     try
                     {
@@ -3094,7 +3461,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         $"FIX delta: {layoutName} VP#{vp.Number} " +
                         $"oldCenter={FormatPoint(oldCenter)} newCenter={FormatPoint(newCenter)} " +
                         $"centerDelta=({centerOffset.X:F4},{centerOffset.Y:F4}) " +
-                        $"targetKept={FormatPoint(oldTarget)} modelOffset={FormatVector(modelOffset)} on={oldOn}->{vp.On} " +
+                        $"target={FormatPoint(oldTarget)}->{FormatPoint(vp.ViewTarget)} modelOffset={FormatVector(modelOffset)} on={oldOn}->{vp.On} " +
                         $"visibleBefore={FormatExtents(GetViewportViewExtents(oldCenter, vp))} " +
                         $"visibleAfter={FormatExtents(GetViewportViewExtents(newCenter, vp))}");
 
@@ -3107,12 +3474,13 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 }
             }
 
-            AcadLogger.LogInfo($"FIX summary: {layoutName} fixed={fixedCount}, skipped={skippedCount}, erasedUtility={erasedUtilityCount}, modelOffset={FormatVector(modelOffset)}");
+            AcadLogger.LogInfo($"FIX summary: {layoutName} fixed={fixedCount}, skipped={skippedCount}, utilityCandidates={erasedUtilityCount}, modelOffset={FormatVector(modelOffset)}");
             return fixedCount;
         }
 
         private bool IsModelViewportCandidate(Viewport vp)
         {
+            // Keep real model viewports and skip utility/default paper viewport patterns.
             return IsRawModelViewport(vp) && !IsUtilityViewport(vp, 0.0);
         }
 
@@ -3141,7 +3509,20 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 vp.ViewHeight <= 25.0 &&
                 vp.CustomScale >= 0.5;
 
-            return defaultPaperViewport;
+            // Guard against false positives: real Revit viewports can be centered near paper center
+            // with the same paper size, but their model view center/target are typically not near origin.
+            if (!defaultPaperViewport)
+                return false;
+
+            // Be more tolerant here because many exports keep the utility viewport center at (6,4.5)
+            // while still being the default paper-space helper viewport.
+            bool looksLikeDefaultView =
+                Math.Abs(vp.ViewCenter.X) <= 10.0 &&
+                Math.Abs(vp.ViewCenter.Y) <= 10.0 &&
+                Math.Abs(vp.ViewTarget.X) <= 10.0 &&
+                Math.Abs(vp.ViewTarget.Y) <= 10.0;
+
+            return looksLikeDefaultView;
         }
 
         private double GetViewportViewArea(Viewport vp)
@@ -3154,18 +3535,39 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
 
         private Vector2d GetViewCenterOffset(Viewport vp, Vector3d modelOffset)
         {
+            // Revit export viewports in this workflow are typically top-view with WCS-aligned model.
+            // The most stable pan is to move ViewCenter by the same XY translation used for ModelSpace entities.
+            // Keep transform-based path as secondary, but guard against unstable matrices that produce huge deltas.
+            var directOffset = new Vector2d(modelOffset.X, modelOffset.Y);
+
             try
             {
                 var wcsToDcs = GetWorldToDcsTransform(vp);
                 var origin = Point3d.Origin.TransformBy(wcsToDcs);
                 var offsetPoint = new Point3d(modelOffset.X, modelOffset.Y, modelOffset.Z).TransformBy(wcsToDcs);
                 var delta = origin.GetVectorTo(offsetPoint);
-                return new Vector2d(delta.X, delta.Y);
+
+                var transformedOffset = new Vector2d(delta.X, delta.Y);
+                double directLen = directOffset.Length;
+                double transformedLen = transformedOffset.Length;
+
+                // If transformed result is numerically unstable (common cause of "title only, no model"),
+                // prefer direct XY translation so viewport continues to display model content.
+                if (double.IsNaN(transformedLen) || double.IsInfinity(transformedLen) ||
+                    (directLen > 1e-9 && transformedLen > directLen * 100.0))
+                {
+                    AcadLogger.LogWarning(
+                        $"GetViewCenterOffset: unstable transformed delta ({transformedOffset.X:F4},{transformedOffset.Y:F4}), " +
+                        $"fallback direct ({directOffset.X:F4},{directOffset.Y:F4})");
+                    return directOffset;
+                }
+
+                return transformedOffset;
             }
             catch (System.Exception ex)
             {
                 AcadLogger.LogWarning($"GetViewCenterOffset fallback: {ex.Message}");
-                return new Vector2d(modelOffset.X, modelOffset.Y);
+                return directOffset;
             }
         }
 
@@ -3195,6 +3597,20 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 $"viewDir={FormatVector(vp.ViewDirection)} viewSize=({viewWidth:F2},{vp.ViewHeight:F2}) " +
                 $"customScale={vp.CustomScale:F8} twist={vp.TwistAngle:F8} locked={vp.Locked} on={vp.On} " +
                 $"visible={FormatExtents(GetViewportViewExtents(vp.ViewCenter, vp))}");
+        }
+
+        private void LogLayoutDiag(
+            string layoutName,
+            string cloneMode,
+            int sourceUsableViewports,
+            int fixedViewports,
+            int bakedEntities,
+            int erasedViewports,
+            Vector3d modelOffset,
+            bool keepViewportLive)
+        {
+            AcadLogger.LogInfo(
+                $"[LAYOUT-DIAG] {{\"layout\":\"{layoutName}\",\"cloneMode\":\"{cloneMode}\",\"keepViewportLive\":{keepViewportLive.ToString().ToLowerInvariant()},\"srcUsableVp\":{sourceUsableViewports},\"fixedVp\":{fixedViewports},\"bakedEntities\":{bakedEntities},\"erasedVp\":{erasedViewports},\"msOffset\":\"{FormatVector(modelOffset)}\"}}");
         }
 
         private string FormatPoint(Point2d point)
@@ -3436,6 +3852,102 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             }
 
             return false;
+        }
+
+        private void ApplyLayoutPlotSettingsSafely(
+            Layout destLayout,
+            PlotSettings sourcePlotSettings,
+            string layoutName,
+            ObjectId originalBtrId,
+            int originalTabOrder,
+            string phaseTag)
+        {
+            if (destLayout == null)
+                return;
+
+            try
+            {
+                if (sourcePlotSettings != null)
+                {
+                    // Log source paper size before copy so we can detect silent failures
+                    AcadLogger.LogInfo(
+                        $"{phaseTag}: Source paper size=({sourcePlotSettings.PlotPaperSize.X:F2},{sourcePlotSettings.PlotPaperSize.Y:F2}) for '{layoutName}'");
+
+                    destLayout.CopyFrom(sourcePlotSettings);
+
+                    double copyW = destLayout.PlotPaperSize.X;
+                    double copyH = destLayout.PlotPaperSize.Y;
+                    AcadLogger.LogInfo(
+                        $"{phaseTag}: Dest paper size=({copyW:F2},{copyH:F2}) for '{layoutName}'");
+
+                    // If CopyFrom silently produced (0,0), apply the canonical paper size
+                    // via PlotSettingsValidator so AutoCAD fully registers it.
+                    if (copyW < 1.0 || copyH < 1.0)
+                    {
+                        double srcW = sourcePlotSettings.PlotPaperSize.X;
+                        double srcH = sourcePlotSettings.PlotPaperSize.Y;
+                        if (srcW > 1.0 && srcH > 1.0)
+                        {
+                            try
+                            {
+                                var psv = PlotSettingsValidator.Current;
+                                psv.SetPlotConfigurationName(destLayout,
+                                    sourcePlotSettings.PlotConfigurationName,
+                                    sourcePlotSettings.CanonicalMediaName);
+                                AcadLogger.LogInfo(
+                                    $"{phaseTag}: PSV applied canonical media '{sourcePlotSettings.CanonicalMediaName}' " +
+                                    $"for '{layoutName}', result size=({destLayout.PlotPaperSize.X:F2},{destLayout.PlotPaperSize.Y:F2})");
+                            }
+                            catch (System.Exception psvEx)
+                            {
+                                AcadLogger.LogWarning($"{phaseTag}: PSV fallback failed for '{layoutName}': {psvEx.Message}");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                // Keep merge alive when source layout/plot settings are corrupt.
+                AcadLogger.LogWarning($"{phaseTag}: CopyFrom PlotSettings failed for '{layoutName}': {ex.Message}");
+            }
+
+            try
+            {
+                if (!originalBtrId.IsNull)
+                    destLayout.BlockTableRecordId = originalBtrId;
+                if (!string.IsNullOrWhiteSpace(layoutName))
+                    destLayout.LayoutName = layoutName;
+                destLayout.TabOrder = originalTabOrder;
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"{phaseTag}: Restore layout identity failed for '{layoutName}': {ex.Message}");
+            }
+        }
+
+        private void DisposePlotSettings(IEnumerable<SourceFileInfo> infos)
+        {
+            if (infos == null)
+                return;
+
+            foreach (var info in infos)
+            {
+                if (info?.PlotSettings == null)
+                    continue;
+
+                try
+                {
+                    info.PlotSettings.Dispose();
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    info.PlotSettings = null;
+                }
+            }
         }
 
         private int CountModelSpaceBackgrounds(Database db, Transaction tr)

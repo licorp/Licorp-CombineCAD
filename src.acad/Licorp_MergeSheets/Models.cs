@@ -13,6 +13,7 @@ namespace Licorp_MergeSheets
         public bool SheetSetEnabled { get; set; } = true;
         public string SheetSetIndexPath { get; set; }
         public string RasterImageMode { get; set; } = "KeepReference";
+        public string ViewportMode { get; set; } = "Live";
         public string StatusPath { get; set; }
         public List<SourceFile> SourceFiles { get; set; }
     }

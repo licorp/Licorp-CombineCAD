@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.EditorInput;
 
@@ -7,6 +9,9 @@ namespace Licorp_MergeSheets
 {
     public static class AcadLogger
     {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern void OutputDebugString(string lpOutputString);
+
         private static readonly string LogFilePath;
         private static readonly object LockObj = new object();
 
@@ -33,6 +38,7 @@ namespace Licorp_MergeSheets
             var logLine = $"[{timestamp}] {message}";
 
             WriteToEditor(logLine);
+            WriteToDebugView(logLine);
             WriteToFile(logLine);
         }
 
@@ -78,6 +84,19 @@ namespace Licorp_MergeSheets
                 {
                     // Silently ignore file errors
                 }
+            }
+        }
+
+        private static void WriteToDebugView(string message)
+        {
+            try
+            {
+                // DebugView can capture this from acad.exe/accoreconsole.exe when Win32 capture is enabled.
+                OutputDebugString(message);
+            }
+            catch
+            {
+                // Silently ignore debug output errors
             }
         }
 

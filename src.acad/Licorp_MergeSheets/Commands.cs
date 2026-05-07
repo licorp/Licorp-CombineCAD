@@ -24,6 +24,7 @@ namespace Licorp_MergeSheets
             try
             {
                 AcadLogger.LogSection("LICORP_MERGESHEETS Command Started");
+                AcadLogger.LogInfo("[ACAD-CMD] command=LICORP_MERGESHEETS");
                 AcadLogger.LogInfo($"Log file: {AcadLogger.GetLogFilePath()}");
 
                 silentMode = File.Exists(SilentConfigPath);
@@ -48,6 +49,8 @@ namespace Licorp_MergeSheets
                     AcadLogger.LogInfo("Silent mode: reading config from temp file");
                 }
 
+                AcadLogger.LogInfo($"[ACAD-CMD] silentMode={silentMode}, configPath={configPath}");
+
                 if (!File.Exists(configPath))
                 {
                     AcadLogger.LogError($"Config file not found: {configPath}");
@@ -67,6 +70,7 @@ namespace Licorp_MergeSheets
                 }
 
                 AcadLogger.LogSection("Merge Configuration");
+                AcadLogger.LogInfo($"[ACAD-CMD] statusPath={config.StatusPath}");
                 AcadLogger.LogInfo($"Mode: {config.Mode}");
                 AcadLogger.LogInfo($"Output: {config.OutputPath}");
                 AcadLogger.LogInfo($"Source files: {config.SourceFiles?.Count ?? 0}");
@@ -75,6 +79,7 @@ namespace Licorp_MergeSheets
                 AcadLogger.LogInfo($"VerifyAfterSave: {config.VerifyAfterSave}");
                 AcadLogger.LogInfo($"CombinedDwgIndexEnabled: {config.SheetSetEnabled}");
                 AcadLogger.LogInfo($"RasterImageMode: {config.RasterImageMode}");
+                AcadLogger.LogInfo($"ViewportMode: {config.ViewportMode}");
 
                 if (config.SourceFiles != null)
                 {
@@ -94,6 +99,10 @@ namespace Licorp_MergeSheets
                         AcadLogger.LogInfo("Calling MergeToMultiLayout...");
                         success = merger.MergeToMultiLayout(config);
                         break;
+                    case "ModelFirstMultiLayout":
+                        AcadLogger.LogInfo("Calling MergeToMultiLayout (ModelFirstMultiLayout alias)...");
+                        success = merger.MergeToMultiLayout(config);
+                        break;
                     case "SingleLayout":
                         AcadLogger.LogInfo("Calling MergeToSingleLayout...");
                         success = merger.MergeToSingleLayout(config);
@@ -107,6 +116,8 @@ namespace Licorp_MergeSheets
                         statusMessage = $"Unknown merge mode: {config.Mode}";
                         return;
                 }
+
+                AcadLogger.LogInfo($"[ACAD-CMD] mergeResult success={success}, mode={config.Mode}");
 
                 if (success && config.VerifyAfterSave)
                 {
@@ -155,6 +166,7 @@ namespace Licorp_MergeSheets
             finally
             {
                 WriteStatus(config, success, statusMessage);
+                AcadLogger.LogInfo($"[ACAD-CMD] finalStatus success={success}, message={statusMessage}");
 
                 if (silentMode && File.Exists(SilentConfigPath))
                 {

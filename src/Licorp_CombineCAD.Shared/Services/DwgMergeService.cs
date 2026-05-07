@@ -97,7 +97,8 @@ namespace Licorp_CombineCAD.Services
             IProgress<MergeProgressInfo> progress = null,
             CancellationToken cancellationToken = default)
         {
-            return await MergeAsync(dwgFiles, outputPath, layoutNames, "MultiLayout", null, progress, cancellationToken);
+            // Route MultiLayout through ModelFirstMultiLayout mode in plugin (Mlabs-style behavior)
+            return await MergeAsync(dwgFiles, outputPath, layoutNames, "ModelFirstMultiLayout", null, progress, cancellationToken);
         }
 
         public async Task<bool> MergeToSingleLayoutAsync(
@@ -264,6 +265,13 @@ namespace Licorp_CombineCAD.Services
                 File.WriteAllText(configPath, CreateMergeConfig(validFiles, layoutNames, outputPath, mode, statusPath));
                 CreateMergeScript(scriptPath, configPath);
 
+                Trace.WriteLine($"[ACAD-RUN] mode={mode}");
+                Trace.WriteLine($"[ACAD-RUN] configPath={configPath}");
+                Trace.WriteLine($"[ACAD-RUN] scriptPath={scriptPath}");
+                Trace.WriteLine($"[ACAD-RUN] statusPath={statusPath}");
+                Trace.WriteLine($"[ACAD-RUN] outputPath={outputPath}");
+                Trace.WriteLine($"[ACAD-RUN] validSources={validFiles.Count}, expectedSheets={_expectedSheetCount}");
+
                 progress?.Report(new MergeProgressInfo
                 {
                     Phase = "Merging",
@@ -349,6 +357,8 @@ namespace Licorp_CombineCAD.Services
             };
 
             File.WriteAllLines(scriptPath, lines);
+            Trace.WriteLine($"[ACAD-RUN] silentConfigPath={silentConfigPath}");
+            Trace.WriteLine($"[ACAD-RUN] scriptLines={string.Join(" | ", lines)}");
         }
 
         private string CreateConsoleSeedFile(string sourcePath)
@@ -464,7 +474,9 @@ namespace Licorp_CombineCAD.Services
         {
             try
             {
-                Trace.WriteLine($"[Merge] Running {engineName}: {startInfo.FileName} {startInfo.Arguments}");
+                Trace.WriteLine($"[ACAD-RUN] engine={engineName}");
+                Trace.WriteLine($"[ACAD-RUN] command={startInfo.FileName} {startInfo.Arguments}");
+                Trace.WriteLine($"[ACAD-RUN] timeoutMs={timeoutMs}, statusPath={statusPath}, outputPath={outputPath}");
 
                 using (var process = Process.Start(startInfo))
                 {
@@ -490,9 +502,9 @@ namespace Licorp_CombineCAD.Services
 
                     Trace.WriteLine($"[Merge] {engineName} exit code: {process.ExitCode}");
                     if (!string.IsNullOrWhiteSpace(output))
-                        Trace.WriteLine($"[Merge] {engineName} output: {TrimForTrace(output)}");
+                        Trace.WriteLine($"[ACAD-RUN] {engineName} stdout: {TrimForTrace(output)}");
                     if (!string.IsNullOrWhiteSpace(errors))
-                        Trace.WriteLine($"[Merge] {engineName} errors: {TrimForTrace(errors)}");
+                        Trace.WriteLine($"[ACAD-RUN] {engineName} stderr: {TrimForTrace(errors)}");
 
                     if (process.ExitCode != 0)
                     {
@@ -517,12 +529,14 @@ namespace Licorp_CombineCAD.Services
 
         private bool EvaluateStatusFile(string engineName, string outputPath, string statusPath)
         {
+            Trace.WriteLine($"[ACAD-RUN] evaluate-status engine={engineName}, statusPath={statusPath}");
             var status = ReadStatus(statusPath);
             if (status != null)
             {
                 _lastRunReturnedPluginStatus = true;
                 LastLogPath = status.LogPath;
                 LastError = status.Success ? null : status.Message;
+                Trace.WriteLine($"[ACAD-RUN] plugin-status success={status.Success}, message={status.Message}, logPath={status.LogPath}");
 
                 if (!status.Success)
                     return false;
