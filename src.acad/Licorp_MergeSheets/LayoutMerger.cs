@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -14,6 +14,7 @@ namespace Licorp_MergeSheets
     {
         private const double LayoutSpacing = 50.0;
         private const string PaperBackgroundLayerName = "LICORP_PAPER_BACKGROUND";
+        private const string ViewportLayerName = "VIEWPORTS";
         private const double PaperBackgroundFallbackWidth = 1066.8;
         private const double PaperBackgroundFallbackHeight = 762.0;
         private const double ModelSpaceSheetMinGap = 25.0;
@@ -1044,6 +1045,34 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             return existingId;
         }
 
+        private ObjectId EnsureViewportLayer(Database db, Transaction tr)
+        {
+            var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            var color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 8);
+
+            if (layers.Has(ViewportLayerName))
+            {
+                var id = layers[ViewportLayerName];
+                var layer = (LayerTableRecord)tr.GetObject(id, OpenMode.ForWrite);
+                layer.IsPlottable = false;
+                layer.Color = color;
+                return id;
+            }
+
+            layers.UpgradeOpen();
+            var newLayer = new LayerTableRecord
+            {
+                Name = ViewportLayerName,
+                IsPlottable = false,
+                Color = color
+            };
+            var layerId = layers.Add(newLayer);
+            tr.AddNewlyCreatedDBObject(newLayer, true);
+            AcadLogger.LogInfo($"VIEWPORT LAYER: created non-plot layer '{ViewportLayerName}'");
+            return layerId;
+        }
+
         private int AddWhitePaperBackgrounds(Database db, Transaction tr)
         {
             int added = 0;
@@ -1235,34 +1264,66 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                 int extentEntities;
                 var contentBounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities);
                 bool hasContentBounds = IsUsableExtents(contentBounds);
+
+                // Normalize title-sheet geometry to paper origin before resolving page setup.
+                // This avoids inflated paper sizes/origins when imported sheets are offset.
+                if (hasContentBounds)
+                {
+                    var shiftX = -contentBounds.MinPoint.X;
+                    var shiftY = -contentBounds.MinPoint.Y;
+
+                    if (Math.Abs(shiftX) > 1e-6 || Math.Abs(shiftY) > 1e-6)
+                    {
+                        var moved = TranslatePaperEntitiesToOrigin(paperSpace, tr, shiftX, shiftY);
+                        AcadLogger.LogInfo(
+                            $"{phase}: normalized paper entities to origin for '{layoutName}', " +
+                            $"move=({shiftX:F4},{shiftY:F4}), moved={moved}");
+
+                        // Recompute after transform so the selected media matches final geometry.
+                        contentBounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities);
+                        hasContentBounds = IsUsableExtents(contentBounds);
+                    }
+                }
+
                 var fallback = hasContentBounds
                     ? contentBounds
                     : GetLayoutPaperFallbackExtents(layout, paperSpace, tr);
 
+                if (hasContentBounds)
+                {
+                    var normalizedBounds = NormalizeLayoutPaperToTitleSheet(
+                        db, layout, contentBounds, layoutName, phase, extentEntities);
+                    if (IsUsableExtents(normalizedBounds))
+                        fallback = normalizedBounds;
+
+                    AcadLogger.LogInfo(
+                        $"{phase}: using title sheet extents for paper context '{layoutName}' => " +
+                        $"bounds={FormatExtents(contentBounds)}, extentEntities={extentEntities}");
+                }
+
                 double width = Math.Max(1.0, fallback.MaxPoint.X - fallback.MinPoint.X);
                 double height = Math.Max(1.0, fallback.MaxPoint.Y - fallback.MinPoint.Y);
-                double requiredWidth = Math.Max(width, fallback.MaxPoint.X > 0.0 ? fallback.MaxPoint.X : width);
-                double requiredHeight = Math.Max(height, fallback.MaxPoint.Y > 0.0 ? fallback.MaxPoint.Y : height);
-
-                requiredWidth = Math.Max(1.0, requiredWidth * 1.01);
-                requiredHeight = Math.Max(1.0, requiredHeight * 1.01);
 
                 double currentWidth = layout.PlotPaperSize.X;
                 double currentHeight = layout.PlotPaperSize.Y;
-                bool invalidPlotSize = currentWidth <= 1.0 || currentHeight <= 1.0;
-                bool tooSmall = currentWidth < requiredWidth * 0.98 || currentHeight < requiredHeight * 0.98;
 
-                if (!invalidPlotSize && !tooSmall)
+                double tol = 2.0; // mm
+                bool invalidPlotSize = currentWidth < 1.0 || currentHeight < 1.0;
+                bool mismatch =
+                    Math.Abs(currentWidth - width) > tol ||
+                    Math.Abs(currentHeight - height) > tol;
+
+                if (!invalidPlotSize && !mismatch)
                 {
                     AcadLogger.LogInfo(
-                        $"{phase}: paper context valid for '{layoutName}' => " +
-                        $"paper=({currentWidth:F2}, {currentHeight:F2}), required=({requiredWidth:F2}, {requiredHeight:F2})");
+                        $"{phase}: paper context exact for {layoutName} " +
+                        $"paper={currentWidth:F2},{currentHeight:F2}, title={width:F2},{height:F2}");
                     return;
                 }
 
                 AcadLogger.LogWarning(
                     $"{phase}: Page setup paper mismatch for '{layoutName}', " +
-                    $"paper=({currentWidth:F2}, {currentHeight:F2}), required=({requiredWidth:F2}, {requiredHeight:F2}), " +
+                    $"paper=({currentWidth:F2}, {currentHeight:F2}), title=({width:F2}, {height:F2}), " +
                     $"bounds={FormatExtents(fallback)}, extentEntities={extentEntities}");
 
                 try
@@ -1270,7 +1331,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                     var psv = PlotSettingsValidator.Current;
                     psv.RefreshLists(layout);
 
-                    string selectedMedia = SelectBestCanonicalMedia(psv, layout, requiredWidth, requiredHeight);
+                    string selectedMedia = SelectBestCanonicalMedia(psv, layout, width, height);
                     if (!string.IsNullOrWhiteSpace(selectedMedia))
                     {
                         psv.SetCanonicalMediaName(layout, selectedMedia);
@@ -1280,10 +1341,11 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                     }
 
                     try { psv.SetPlotType(layout, PlotType.Layout); } catch { }
+                    try { psv.SetPlotCentered(layout, false); } catch { }
                     try { psv.SetPlotOrigin(layout, new Point2d(0.0, 0.0)); } catch { }
 
                     AcadLogger.LogInfo(
-                        $"{phase}: geometry paper context applied for '{layoutName}', required=({requiredWidth:F2}, {requiredHeight:F2})");
+                        $"{phase}: geometry paper context applied for '{layoutName}', required=({width:F2}, {height:F2})");
                 }
                 catch (System.Exception psvEx)
                 {
@@ -1298,6 +1360,98 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             }
         }
 
+        private int TranslatePaperEntitiesToOrigin(BlockTableRecord paperSpace, Transaction tr, double dx, double dy)
+        {
+            int moved = 0;
+            var transform = Matrix3d.Displacement(new Vector3d(dx, dy, 0.0));
+
+            foreach (ObjectId id in paperSpace)
+            {
+                try
+                {
+                    var ent = tr.GetObject(id, OpenMode.ForWrite, false) as Entity;
+                    if (ent == null || ent.IsErased || ent is Viewport)
+                        continue;
+
+                    if (string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    ent.TransformBy(transform);
+                    moved++;
+                }
+                catch
+                {
+                }
+            }
+
+            return moved;
+        }
+
+        private Extents3d NormalizeLayoutPaperToTitleSheet(
+            Database db,
+            Layout layout,
+            Extents3d titleBounds,
+            string layoutName,
+            string phase,
+            int extentEntities)
+        {
+            try
+            {
+                if (layout == null || !IsUsableExtents(titleBounds))
+                    return titleBounds;
+
+                double minX = titleBounds.MinPoint.X;
+                double minY = titleBounds.MinPoint.Y;
+                double width = Math.Max(1.0, titleBounds.MaxPoint.X - titleBounds.MinPoint.X);
+                double height = Math.Max(1.0, titleBounds.MaxPoint.Y - titleBounds.MinPoint.Y);
+
+                var previousWorkingDb = HostApplicationServices.WorkingDatabase;
+                try
+                {
+                    HostApplicationServices.WorkingDatabase = db;
+                    var psv = PlotSettingsValidator.Current;
+                    psv.RefreshLists(layout);
+
+                    string selectedMedia = SelectBestCanonicalMedia(psv, layout, width, height);
+                    if (!string.IsNullOrWhiteSpace(selectedMedia))
+                    {
+                        psv.SetCanonicalMediaName(layout, selectedMedia);
+                        double paperW = layout.PlotPaperSize.X;
+                        double paperH = layout.PlotPaperSize.Y;
+
+                        double dNormal = Math.Abs(paperW - width) + Math.Abs(paperH - height);
+                        double dRotated = Math.Abs(paperW - height) + Math.Abs(paperH - width);
+                        bool rotate = dRotated < dNormal;
+
+                        try { psv.SetPlotRotation(layout, rotate ? PlotRotation.Degrees090 : PlotRotation.Degrees000); } catch { }
+                        try { psv.SetPlotType(layout, PlotType.Layout); } catch { }
+                        try { psv.SetPlotCentered(layout, false); } catch { }
+                        try { psv.SetPlotOrigin(layout, new Point2d(-minX, -minY)); } catch { }
+
+                        AcadLogger.LogInfo(
+                            $"{phase}: title sheet paper matched for '{layoutName}', " +
+                            $"titleBounds={FormatExtents(titleBounds)}, titleSize=({width:F2},{height:F2}), " +
+                            $"media='{selectedMedia}', paper=({layout.PlotPaperSize.X:F2},{layout.PlotPaperSize.Y:F2}), " +
+                            $"origin=({-minX:F2},{-minY:F2}), extentEntities={extentEntities}");
+
+                        return new Extents3d(
+                            new Point3d(0.0, 0.0, 0.0),
+                            new Point3d(Math.Max(width, layout.PlotPaperSize.X), Math.Max(height, layout.PlotPaperSize.Y), 0.0));
+                    }
+                }
+                finally
+                {
+                    try { HostApplicationServices.WorkingDatabase = previousWorkingDb; } catch { }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"{phase}: title sheet paper match failed for '{layoutName}': {ex.Message}");
+            }
+
+            return titleBounds;
+        }
+
         private string SelectBestCanonicalMedia(
             PlotSettingsValidator psv,
             Layout layout,
@@ -1307,11 +1461,9 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             string originalMedia = null;
             try { originalMedia = layout.CanonicalMediaName; } catch { }
 
-            string bestFit = null;
-            double bestFitWaste = double.MaxValue;
-            string closest = null;
-            double closestShortfall = double.MaxValue;
-            double closestArea = 0.0;
+            string best = null;
+            double bestScore = double.MaxValue;
+            const double exactTol = 2.0; // mm
 
             try
             {
@@ -1324,42 +1476,25 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                     try
                     {
                         psv.SetCanonicalMediaName(layout, mediaName);
-
-                        double mediaWidth = layout.PlotPaperSize.X;
-                        double mediaHeight = layout.PlotPaperSize.Y;
-                        if (mediaWidth <= 1.0 || mediaHeight <= 1.0)
+                        double mw = layout.PlotPaperSize.X;
+                        double mh = layout.PlotPaperSize.Y;
+                        if (mw < 1.0 || mh < 1.0)
                             continue;
 
-                        bool fits = mediaWidth >= requiredWidth && mediaHeight >= requiredHeight;
-                        double mediaArea = mediaWidth * mediaHeight;
+                        double d1 = Math.Abs(mw - requiredWidth) + Math.Abs(mh - requiredHeight);
+                        double d2 = Math.Abs(mw - requiredHeight) + Math.Abs(mh - requiredWidth);
+                        double score = Math.Min(d1, d2);
 
-                        if (fits)
+                        if (score < bestScore)
                         {
-                            double waste = mediaArea - (requiredWidth * requiredHeight);
-                            if (waste < bestFitWaste)
-                            {
-                                bestFitWaste = waste;
-                                bestFit = mediaName;
-                            }
-
-                            continue;
+                            bestScore = score;
+                            best = mediaName;
                         }
 
-                        double shortfall =
-                            Math.Max(0.0, requiredWidth - mediaWidth) +
-                            Math.Max(0.0, requiredHeight - mediaHeight);
-
-                        if (shortfall < closestShortfall ||
-                            (Math.Abs(shortfall - closestShortfall) < 1e-6 && mediaArea > closestArea))
-                        {
-                            closestShortfall = shortfall;
-                            closestArea = mediaArea;
-                            closest = mediaName;
-                        }
+                        if (score <= exactTol)
+                            break;
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
             }
             finally
@@ -1370,7 +1505,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                 }
             }
 
-            return bestFit ?? closest;
+            return best;
         }
 
         private Extents3d GetPaperBackgroundExtents(Layout layout, BlockTableRecord paperSpace, Transaction tr, out int extentEntities)
@@ -1590,6 +1725,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             double minX = double.MaxValue, minY = double.MaxValue;
             double maxX = double.MinValue, maxY = double.MinValue;
             extentsEntityCount = 0;
+            var sheetCandidates = new List<Extents3d>();
 
             foreach (ObjectId id in paperSpace)
             {
@@ -1601,6 +1737,9 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                     if (string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
                         continue;
+
+                    if (TryGetTitleSheetBounds(ent, out var frameBounds))
+                        sheetCandidates.Add(frameBounds);
 
                     var ext = ent.GeometricExtents;
                     minX = Math.Min(minX, ext.MinPoint.X);
@@ -1614,10 +1753,91 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                 }
             }
 
+            if (sheetCandidates.Count > 0)
+                return SelectBestTitleSheetCandidate(sheetCandidates);
+
             if (minX == double.MaxValue)
                 return new Extents3d(Point3d.Origin, Point3d.Origin);
 
             return new Extents3d(new Point3d(minX, minY, 0.0), new Point3d(maxX, maxY, 0.0));
+        }
+
+        private bool TryGetTitleSheetBounds(Entity ent, out Extents3d bounds)
+        {
+            bounds = new Extents3d(Point3d.Origin, Point3d.Origin);
+
+            try
+            {
+                if (ent is Polyline lw)
+                {
+                    if (!lw.Closed || lw.NumberOfVertices < 4)
+                        return false;
+
+                    bounds = lw.GeometricExtents;
+                    if (!IsReasonableSheetBounds(bounds))
+                        return false;
+
+                    double w = bounds.MaxPoint.X - bounds.MinPoint.X;
+                    double h = bounds.MaxPoint.Y - bounds.MinPoint.Y;
+                    if (w < 300.0 || h < 200.0)
+                        return false;
+
+                    return true;
+                }
+
+                if (ent is Polyline2d p2d)
+                {
+                    if (!p2d.Closed)
+                        return false;
+
+                    bounds = p2d.GeometricExtents;
+                    return IsReasonableSheetBounds(bounds);
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private bool IsReasonableSheetBounds(Extents3d bounds)
+        {
+            double w = bounds.MaxPoint.X - bounds.MinPoint.X;
+            double h = bounds.MaxPoint.Y - bounds.MinPoint.Y;
+            if (w < 100.0 || h < 100.0)
+                return false;
+
+            double area = w * h;
+            return area >= 25000.0;
+        }
+
+        private Extents3d SelectBestTitleSheetCandidate(List<Extents3d> candidates)
+        {
+            var best = candidates[0];
+            double bestScore = double.MinValue;
+
+            foreach (var c in candidates)
+            {
+                double w = c.MaxPoint.X - c.MinPoint.X;
+                double h = c.MaxPoint.Y - c.MinPoint.Y;
+                if (w <= 1.0 || h <= 1.0)
+                    continue;
+
+                double area = w * h;
+                double nearOriginPenalty = Math.Abs(c.MinPoint.X) + Math.Abs(c.MinPoint.Y);
+                double ratio = w > h ? w / h : h / w;
+                double ratioPenalty = Math.Abs(ratio - 1.414);
+
+                double score = area - nearOriginPenalty * 2000.0 - ratioPenalty * 100000.0;
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = c;
+                }
+            }
+
+            return best;
         }
 
         private int CreateModelSpaceSheetBackground(
@@ -3167,7 +3387,11 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         Height = vp.Height,
                         Number = vp.Number,
                         Locked = vp.Locked,
-                        On = vp.On
+                        On = vp.On,
+                        Layer = vp.Layer,
+                        ColorIndex = vp.Color == null ? (short)256 : vp.Color.ColorIndex,
+                        LinetypeId = vp.LinetypeId,
+                        LineWeight = vp.LineWeight
                     });
 
                     LogViewportState(label, vp);
@@ -3356,6 +3580,8 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         $"RECREATE viewport could not switch/activate layout '{layoutName}': {modeEx.Message}");
                 }
 
+                var viewportLayerId = EnsureViewportLayer(db, trans);
+
                 foreach (var sourceViewport in sourceViewports)
                 {
                     try
@@ -3372,9 +3598,19 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         }
 
                         var vp = new Viewport();
-                        vp.SetDatabaseDefaults();
+                        vp.SetDatabaseDefaults(db);
                         paperSpace.AppendEntity(vp);
                         trans.AddNewlyCreatedDBObject(vp, true);
+
+                        vp.LayerId = viewportLayerId;
+                        vp.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                            Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
+
+                        // IMPORTANT: sourceViewport.LinetypeId belongs to source database.
+                        // Assigning cross-database ObjectId here throws eWrongDatabase and
+                        // prevents viewport creation. Keep ByLayer linetype in destination DB.
+                        vp.Linetype = "ByLayer";
+                        vp.LineWeight = sourceViewport.LineWeight;
 
                         vp.CenterPoint = sourceViewport.CenterPoint;
                         vp.Width = sourceViewport.Width;
@@ -3384,13 +3620,13 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                             ? Vector3d.ZAxis
                             : sourceViewport.ViewDirection;
 
-                        // Keep source camera target; pan DCS window by model offset transformed to viewport plane.
-                        vp.ViewTarget = sourceViewport.ViewTarget;
-
-                        var centerOffset = GetViewCenterOffset(vp, modelOffset);
-                        vp.ViewCenter = new Point2d(
-                            sourceViewport.ViewCenter.X + centerOffset.X,
-                            sourceViewport.ViewCenter.Y + centerOffset.Y);
+                        // Offset the camera target in WCS with moved ModelSpace geometry.
+                        // Keep source ViewCenter so paper viewport framing and CustomScale stay identical.
+                        vp.ViewTarget = new Point3d(
+                            sourceViewport.ViewTarget.X + modelOffset.X,
+                            sourceViewport.ViewTarget.Y + modelOffset.Y,
+                            sourceViewport.ViewTarget.Z + modelOffset.Z);
+                        vp.ViewCenter = sourceViewport.ViewCenter;
                         vp.ViewHeight = sourceViewport.ViewHeight;
 
                         if (sourceViewport.CustomScale > 0.0)
@@ -4205,6 +4441,10 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             public int Number { get; set; }
             public bool Locked { get; set; }
             public bool On { get; set; }
+            public string Layer { get; set; }
+            public short ColorIndex { get; set; }
+            public ObjectId LinetypeId { get; set; }
+            public LineWeight LineWeight { get; set; }
         }
     }
 }

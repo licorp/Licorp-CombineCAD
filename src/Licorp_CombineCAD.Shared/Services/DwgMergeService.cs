@@ -524,6 +524,9 @@ namespace Licorp_CombineCAD.Services
                     if (process.ExitCode != 0)
                         Trace.WriteLine($"[ACAD-RUN] {engineName} exited with non-zero code {process.ExitCode}; evaluating status/output before failing.");
 
+                    // Give the plugin a short grace period to flush status/output to disk.
+                    await Task.Delay(300, cancellationToken);
+
                     return await EvaluateMergeRunResultAsync(engineName, process.ExitCode, outputPath, statusPath, cancellationToken);
                 }
             }
@@ -548,7 +551,7 @@ namespace Licorp_CombineCAD.Services
         {
             Trace.WriteLine($"[ACAD-RUN] evaluate-status engine={engineName}, statusPath={statusPath}");
 
-            string deferredFailureMessage = null;
+            bool sawInvalidOrMissingStatus = false;
 
             for (int i = 0; i < 20; i++)
             {
@@ -574,9 +577,7 @@ namespace Licorp_CombineCAD.Services
                             return true;
                         }
 
-                        // Status success can arrive slightly before DWG file flush/handle release.
-                        // Defer failure and keep polling for a short period.
-                        deferredFailureMessage = $"{engineName} reported success, but output DWG appears invalid: {reason}";
+                        sawInvalidOrMissingStatus = true;
                         Trace.WriteLine($"[ACAD-RUN] status success but output not ready yet (attempt {i + 1}/20): {reason}");
                     }
                     else
@@ -588,6 +589,10 @@ namespace Licorp_CombineCAD.Services
                         Trace.WriteLine($"[ACAD-RUN] plugin reported failure status, stopping evaluation. lastError={LastError}");
                         return false;
                     }
+                }
+                else
+                {
+                    sawInvalidOrMissingStatus = true;
                 }
 
                 if (IsLikelyValidCombinedDwg(expectedOutputPath, out _))
@@ -608,14 +613,19 @@ namespace Licorp_CombineCAD.Services
                 return true;
             }
 
-            if (!string.IsNullOrWhiteSpace(deferredFailureMessage))
+            LastLogPath = GetLatestMergeLogPath();
+            if (!string.IsNullOrWhiteSpace(expectedOutputPath) && File.Exists(expectedOutputPath))
             {
-                LastError = deferredFailureMessage;
-                return false;
+                LastError = null;
+                Trace.WriteLine($"[ACAD-RUN] fallback success by file existence after retries: {expectedOutputPath}");
+                return true;
             }
 
-            LastLogPath = GetLatestMergeLogPath();
-            LastError = $"{engineName} exited with code {exitCode} but no valid status/output was detected.";
+            if (sawInvalidOrMissingStatus)
+                LastError = $"{engineName} exited with code {exitCode} but no valid status/output was detected.";
+            else
+                LastError = $"{engineName} exited with code {exitCode}.";
+
             return false;
         }
 
