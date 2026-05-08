@@ -79,6 +79,7 @@ namespace Licorp_MergeSheets
                 AcadLogger.LogInfo($"VerifyAfterSave: {config.VerifyAfterSave}");
                 AcadLogger.LogInfo($"CombinedDwgIndexEnabled: {config.SheetSetEnabled}");
                 AcadLogger.LogInfo($"RasterImageMode: {config.RasterImageMode}");
+                AcadLogger.LogInfo($"MergeLayers: {config.MergeLayers}");
                 AcadLogger.LogInfo($"ViewportMode: {config.ViewportMode}");
 
                 if (config.SourceFiles != null)

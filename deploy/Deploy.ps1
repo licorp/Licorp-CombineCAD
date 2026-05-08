@@ -15,11 +15,7 @@ $BinFolder = Join-Path $ProjectRoot "bin"
 function Deploy-RevitAddin {
     Write-Host "[Deploy] Installing Revit add-in..." -ForegroundColor Cyan
 
-    $dllSource = Join-Path $BinFolder "R2025\Release\Licorp_CombineCAD.dll"
-    $addinSource = Join-Path $PSScriptRoot "Licorp_CombineCAD.addin"
-
-    $bundleDest = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_CombineCAD\R2025"
-    $addinDir = "$env:PROGRAMDATA\Autodesk\Revit\Addins\2025"
+    $versions = @("2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027")
     $wrongBundle = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_CombineCAD.bundle"
 
     # Clean up wrong folder if exists
@@ -29,23 +25,28 @@ function Deploy-RevitAddin {
     }
 
     if (!$Uninstall) {
-        if (!(Test-Path $bundleDest)) {
-            New-Item -ItemType Directory -Path $bundleDest -Force | Out-Null
-        }
-        if (!(Test-Path $addinDir)) {
-            New-Item -ItemType Directory -Path $addinDir -Force | Out-Null
-        }
+        foreach ($ver in $versions) {
+            $dllSource = Join-Path $BinFolder "R$ver\Release\Licorp_CombineCAD.dll"
+            $bundleDest = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_CombineCAD\R$ver"
+            $addinDir = "$env:PROGRAMDATA\Autodesk\Revit\Addins\$ver"
 
-        if (Test-Path $dllSource) {
-            Copy-Item $dllSource -Destination $bundleDest -Force
-            Copy-Item (Join-Path (Split-Path $dllSource) "*") -Destination $bundleDest -Recurse -Force
-            Write-Host " DLLs: $dllSource" -ForegroundColor Gray
-        } else {
-            Write-Host " DLL not found: $dllSource (build R2025 project first)" -ForegroundColor Red
-            return
-        }
+            if (!(Test-Path $bundleDest)) {
+                New-Item -ItemType Directory -Path $bundleDest -Force | Out-Null
+            }
+            if (!(Test-Path $addinDir)) {
+                New-Item -ItemType Directory -Path $addinDir -Force | Out-Null
+            }
 
-        $addinContent = @"
+            if (Test-Path $dllSource) {
+                Copy-Item $dllSource -Destination $bundleDest -Force
+                Copy-Item (Join-Path (Split-Path $dllSource) "*") -Destination $bundleDest -Recurse -Force
+                Write-Host " DLLs (R$ver): $dllSource" -ForegroundColor Gray
+            } else {
+                Write-Host " DLL not found for R$ver: $dllSource" -ForegroundColor Yellow
+                continue
+            }
+
+            $addinContent = @"
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <RevitAddIns>
   <AddIn Type="Application">
@@ -58,18 +59,23 @@ function Deploy-RevitAddin {
   </AddIn>
 </RevitAddIns>
 "@
-        Set-Content -Path "$addinDir\Licorp_CombineCAD.addin" -Value $addinContent
-        Write-Host " ADDIN: $addinDir\Licorp_CombineCAD.addin" -ForegroundColor Gray
-
-        Write-Host " Installed: $bundleDest" -ForegroundColor Green
-    } else {
-        if (Test-Path $bundleDest) {
-            Remove-Item $bundleDest -Recurse -Force
-            Write-Host " Uninstalled: $bundleDest" -ForegroundColor Yellow
+            Set-Content -Path "$addinDir\Licorp_CombineCAD.addin" -Value $addinContent
+            Write-Host " ADDIN: $addinDir\Licorp_CombineCAD.addin" -ForegroundColor Gray
+            Write-Host " Installed: $bundleDest" -ForegroundColor Green
         }
-        if (Test-Path "$addinDir\Licorp_CombineCAD.addin") {
-            Remove-Item "$addinDir\Licorp_CombineCAD.addin" -Force
-            Write-Host " Uninstalled: $addinDir\Licorp_CombineCAD.addin" -ForegroundColor Yellow
+    } else {
+        foreach ($ver in $versions) {
+            $bundleDest = "$env:PROGRAMDATA\Autodesk\ApplicationPlugins\Licorp_CombineCAD\R$ver"
+            $addinDir = "$env:PROGRAMDATA\Autodesk\Revit\Addins\$ver"
+
+            if (Test-Path $bundleDest) {
+                Remove-Item $bundleDest -Recurse -Force
+                Write-Host " Uninstalled: $bundleDest" -ForegroundColor Yellow
+            }
+            if (Test-Path "$addinDir\Licorp_CombineCAD.addin") {
+                Remove-Item "$addinDir\Licorp_CombineCAD.addin" -Force
+                Write-Host " Uninstalled: $addinDir\Licorp_CombineCAD.addin" -ForegroundColor Yellow
+            }
         }
     }
 }
@@ -88,6 +94,8 @@ $newtonsoftNet80Source = Join-Path $BinFolder "acad\Release\net8.0-windows\Newto
 
 $contents2024Dest = Join-Path $contentsDest "2024"
 $contents2025Dest = Join-Path $contentsDest "2025"
+$contents2026Dest = Join-Path $contentsDest "2026"
+$contents2027Dest = Join-Path $contentsDest "2027"
 
 if (!$Uninstall) {
 if (!(Test-Path $bundleDest)) {
@@ -97,6 +105,8 @@ New-Item -ItemType Directory -Path $bundleDest -Force | Out-Null
 New-Item -ItemType Directory -Path $contentsDest -Force | Out-Null
 New-Item -ItemType Directory -Path $contents2024Dest -Force | Out-Null
 New-Item -ItemType Directory -Path $contents2025Dest -Force | Out-Null
+New-Item -ItemType Directory -Path $contents2026Dest -Force | Out-Null
+New-Item -ItemType Directory -Path $contents2027Dest -Force | Out-Null
 
 if (Test-Path $dllNet48Source) {
 Copy-Item $dllNet48Source -Destination $contents2024Dest -Force
@@ -107,6 +117,8 @@ Write-Host " DLL (net48) not found: $dllNet48Source" -ForegroundColor Red
 
 if (Test-Path $dllNet80Source) {
 Copy-Item $dllNet80Source -Destination $contents2025Dest -Force
+Copy-Item $dllNet80Source -Destination $contents2026Dest -Force
+Copy-Item $dllNet80Source -Destination $contents2027Dest -Force
 Write-Host " DLL (net8.0): $dllNet80Source" -ForegroundColor Gray
 } else {
 Write-Host " DLL (net8.0) not found: $dllNet80Source" -ForegroundColor Red
@@ -117,6 +129,8 @@ Copy-Item $newtonsoftNet48Source -Destination $contents2024Dest -Force
 }
 if (Test-Path $newtonsoftNet80Source) {
 Copy-Item $newtonsoftNet80Source -Destination $contents2025Dest -Force
+Copy-Item $newtonsoftNet80Source -Destination $contents2026Dest -Force
+Copy-Item $newtonsoftNet80Source -Destination $contents2027Dest -Force
 }
 
 $packageContents = Join-Path $bundleSource "PackageContents.xml"
@@ -128,6 +142,8 @@ Write-Host " PackageContents.xml: $packageContents" -ForegroundColor Gray
 Write-Host " Installed: $bundleDest" -ForegroundColor Green
 Write-Host "   -> Contents/2024/ (AutoCAD 2024, .NET Framework 4.8)" -ForegroundColor Gray
 Write-Host "   -> Contents/2025/ (AutoCAD 2025+, .NET 8.0)" -ForegroundColor Gray
+Write-Host "   -> Contents/2026/ (AutoCAD 2026, .NET 8.0)" -ForegroundColor Gray
+Write-Host "   -> Contents/2027/ (AutoCAD 2027, .NET 8.0)" -ForegroundColor Gray
 } else {
 if (Test-Path $bundleDest) {
 Remove-Item $bundleDest -Recurse -Force

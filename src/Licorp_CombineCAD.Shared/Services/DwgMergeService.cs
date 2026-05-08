@@ -71,6 +71,11 @@ namespace Licorp_CombineCAD.Services
             _expectedSheetCount = Math.Max(0, expectedSheetCount);
         }
 
+        public void SetMergeLayers(bool mergeLayers)
+        {
+            _reliability.MergeLayers = mergeLayers;
+        }
+
         public void EnsurePluginInstalled()
         {
             if (IsPluginLoaded) return;
@@ -146,80 +151,6 @@ namespace Licorp_CombineCAD.Services
             finally
             {
                 TryDeleteTempFile(seedPath);
-            }
-        }
-
-        /// <summary>
-        /// Fix DWG files that may have empty ModelSpace (e.g., sheets with only schedules).
-        /// Adds a tiny invisible point to ModelSpace to prevent CloneLayoutFromSource errors.
-        /// </summary>
-        private void FixEmptyModelSpaceFiles(List<string> dwgFiles, CancellationToken cancellationToken)
-        {
-            if (string.IsNullOrEmpty(_accoreconsolePath))
-                return;
-
-            foreach (var file in dwgFiles)
-            {
-                if (!File.Exists(file))
-                    continue;
-
-                try
-                {
-                    var fi = new FileInfo(file);
-                    
-                    // Always try to fix - schedule-only DWG files can be any size
-                    Trace.WriteLine($"[Merge] Fixing empty ModelSpace: {Path.GetFileName(file)} ({fi.Length} bytes)");
-
-                    var scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_FixEmpty_{Guid.NewGuid():N}.scr");
-                    // Script to switch to ModelSpace, add a point, save
-                    var lines = new List<string>
-                    {
-                        "TILEMODE",
-                        "1",
-                        "POINT",
-                        "0,0,0",
-                        "ZOOM",
-                        "EXTENTS",
-                        "QSAVE",
-                        "QUIT",
-                        "Y"
-                    };
-                    File.WriteAllLines(scriptPath, lines);
-
-                    var startInfo = new ProcessStartInfo
-                    {
-                        FileName = _accoreconsolePath,
-                        Arguments = $"/i \"{file}\" /s \"{scriptPath}\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = false,
-                        RedirectStandardError = false
-                    };
-
-                    using (var process = Process.Start(startInfo))
-                    {
-                        if (process != null)
-                        {
-                            const int fixTimeoutMs = 30000;
-                            if (!process.WaitForExit(fixTimeoutMs))
-                            {
-                                try { process.Kill(); }
-                                catch { }
-
-                                Trace.WriteLine(
-                                    $"[Merge] FixEmptyModelSpace timed out after {fixTimeoutMs / 1000}s for {Path.GetFileName(file)}");
-                                continue;
-                            }
-                        }
-                    }
-
-                    TryDeleteTempFile(scriptPath);
-                    Trace.WriteLine($"[Merge] Fixed empty ModelSpace: {Path.GetFileName(file)}");
-                }
-                catch (Exception ex)
-                {
-                    Trace.WriteLine($"[Merge] FixEmptyModelSpace failed for {file}: {ex.Message}");
-                }
             }
         }
 
@@ -330,6 +261,7 @@ namespace Licorp_CombineCAD.Services
                 SheetSetEnabled = _reliability.SheetSetEnabled,
                 SheetSetIndexPath = sheetSetIndexPath,
                 RasterImageMode = _reliability.RasterImageMode,
+                MergeLayers = _reliability.MergeLayers,
                 StatusPath = statusPath,
                 SourceFiles = new List<SourceFileDto>()
             };
@@ -525,7 +457,7 @@ namespace Licorp_CombineCAD.Services
                         Trace.WriteLine($"[ACAD-RUN] {engineName} exited with non-zero code {process.ExitCode}; evaluating status/output before failing.");
 
                     // Give the plugin a short grace period to flush status/output to disk.
-                    await Task.Delay(300, cancellationToken);
+                    await Task.Delay(500, cancellationToken);
 
                     return await EvaluateMergeRunResultAsync(engineName, process.ExitCode, outputPath, statusPath, cancellationToken);
                 }
@@ -551,7 +483,8 @@ namespace Licorp_CombineCAD.Services
         {
             Trace.WriteLine($"[ACAD-RUN] evaluate-status engine={engineName}, statusPath={statusPath}");
 
-            bool sawInvalidOrMissingStatus = false;
+            bool sawStatus = false;
+            bool sawStatusFailure = false;
 
             for (int i = 0; i < 20; i++)
             {
@@ -560,6 +493,7 @@ namespace Licorp_CombineCAD.Services
                 var status = ReadStatus(statusPath);
                 if (status != null)
                 {
+                    sawStatus = true;
                     _lastRunReturnedPluginStatus = true;
                     LastLogPath = status.LogPath;
 
@@ -571,34 +505,29 @@ namespace Licorp_CombineCAD.Services
 
                     if (status.Success)
                     {
-                        if (IsLikelyValidCombinedDwg(finalOutputPath, out var reason))
+                        if (!string.IsNullOrWhiteSpace(finalOutputPath) && File.Exists(finalOutputPath))
                         {
                             LastError = null;
                             return true;
                         }
 
-                        sawInvalidOrMissingStatus = true;
-                        Trace.WriteLine($"[ACAD-RUN] status success but output not ready yet (attempt {i + 1}/20): {reason}");
+                        Trace.WriteLine($"[ACAD-RUN] status success but output not ready yet (attempt {i + 1}/20): {finalOutputPath}");
                     }
                     else
                     {
+                        sawStatusFailure = true;
                         LastError = string.IsNullOrWhiteSpace(status.Message)
                             ? $"{engineName} reported failure status."
                             : status.Message;
 
-                        Trace.WriteLine($"[ACAD-RUN] plugin reported failure status, stopping evaluation. lastError={LastError}");
-                        return false;
+                        Trace.WriteLine($"[ACAD-RUN] plugin reported failure status (attempt {i + 1}/20). lastError={LastError}");
                     }
                 }
-                else
-                {
-                    sawInvalidOrMissingStatus = true;
-                }
 
-                if (IsLikelyValidCombinedDwg(expectedOutputPath, out _))
+                if (!string.IsNullOrWhiteSpace(expectedOutputPath) && File.Exists(expectedOutputPath))
                 {
                     LastError = null;
-                    Trace.WriteLine($"[ACAD-RUN] status missing/delayed, but output DWG exists and looks valid: {expectedOutputPath}");
+                    Trace.WriteLine($"[ACAD-RUN] status missing/delayed, but output DWG exists: {expectedOutputPath}");
                     return true;
                 }
 
@@ -621,7 +550,7 @@ namespace Licorp_CombineCAD.Services
                 return true;
             }
 
-            if (sawInvalidOrMissingStatus)
+            if (!sawStatus || sawStatusFailure)
                 LastError = $"{engineName} exited with code {exitCode} but no valid status/output was detected.";
             else
                 LastError = $"{engineName} exited with code {exitCode}.";
@@ -801,6 +730,7 @@ namespace Licorp_CombineCAD.Services
             public bool SheetSetEnabled { get; set; }
             public string SheetSetIndexPath { get; set; }
             public string RasterImageMode { get; set; }
+            public bool MergeLayers { get; set; }
             public string StatusPath { get; set; }
             public List<SourceFileDto> SourceFiles { get; set; }
         }
@@ -824,6 +754,7 @@ namespace Licorp_CombineCAD.Services
             public bool VerifyAfterSave { get; set; } = true;
             public bool SheetSetEnabled { get; set; } = true;
             public string RasterImageMode { get; set; } = "KeepReference";
+            public bool MergeLayers { get; set; } = true;
         }
     }
 

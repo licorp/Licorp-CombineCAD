@@ -146,8 +146,28 @@ if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compilation failed."
 }
 
-if (!(Test-Path -LiteralPath $tempSetupExe)) {
-    throw "Installer was not generated: $tempSetupExe"
+function Wait-PathAccessible {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [int]$RetryCount = 20,
+        [int]$DelayMs = 500
+    )
+
+    for ($i = 0; $i -lt $RetryCount; $i++) {
+        try {
+            $null = Get-Item -LiteralPath $Path -ErrorAction Stop
+            return $true
+        }
+        catch {
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+
+    return $false
+}
+
+if (-not (Wait-PathAccessible -Path $tempSetupExe)) {
+    throw "Installer was not generated or not accessible: $tempSetupExe"
 }
 
 $targetLocked = $false
@@ -169,8 +189,11 @@ if ($targetLocked) {
     $setupExe = Join-Path $installerDir ("Licorp_CombineCAD_Setup_{0}_{1:yyyyMMdd_HHmmss}.exe" -f $Version, (Get-Date))
 }
 
-if (!(Test-Path -LiteralPath $setupExe)) {
-    Copy-Item -LiteralPath $tempSetupExe -Destination $setupExe -Force
+try {
+    Copy-Item -LiteralPath $tempSetupExe -Destination $setupExe -Force -ErrorAction Stop
+}
+catch {
+    throw "Failed to copy setup exe to release path: $setupExe. $($_.Exception.Message)"
 }
 
 $zipPath = Join-Path $artifactRoot "Licorp_CombineCAD_Setup_$Version.zip"
