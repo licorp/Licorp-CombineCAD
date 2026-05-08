@@ -23,3 +23,6 @@ implementation_plan.md
 task.md
 WALKTHROUGH.md
 AUTOCAD_PLUGIN_SETUP.md
+
+## Build/Release artifacts staging
+artifacts/**/work/
