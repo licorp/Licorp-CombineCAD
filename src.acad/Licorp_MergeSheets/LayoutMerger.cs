@@ -1298,7 +1298,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                     AcadLogger.LogInfo(
                         $"{phase}: using title sheet extents for paper context '{layoutName}' => " +
-                        $"bounds={FormatExtents(contentBounds)}, extentEntities={extentEntities}");
+                        $"bounds={FormatExtents(fallback)}, extentEntities={extentEntities}");
                 }
 
                 double width = Math.Max(1.0, fallback.MaxPoint.X - fallback.MinPoint.X);
@@ -1434,9 +1434,12 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                             $"media='{selectedMedia}', paper=({layout.PlotPaperSize.X:F2},{layout.PlotPaperSize.Y:F2}), " +
                             $"origin=({-minX:F2},{-minY:F2}), extentEntities={extentEntities}");
 
+                        // Keep fallback bounds aligned with detected title-sheet geometry.
+                        // Do not merge with PlotPaperSize, otherwise mixed orientation can
+                        // inflate bounds into a square (e.g. 1066.8 x 1066.8).
                         return new Extents3d(
                             new Point3d(0.0, 0.0, 0.0),
-                            new Point3d(Math.Max(width, layout.PlotPaperSize.X), Math.Max(height, layout.PlotPaperSize.Y), 0.0));
+                            new Point3d(width, height, 0.0));
                     }
                 }
                 finally
