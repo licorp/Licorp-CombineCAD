@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace Licorp_MergeSheets
@@ -17,6 +18,12 @@ namespace Licorp_MergeSheets
         public string ViewportMode { get; set; } = "Live";
         public string StatusPath { get; set; }
         public List<SourceFile> SourceFiles { get; set; }
+
+        /// <summary>
+        /// Progress callback: (currentLayoutIndex, totalLayouts, layoutName)
+        /// </summary>
+        [NonSerialized]
+        public Action<int, int, string> ProgressCallback;
     }
 
     public class SourceFile

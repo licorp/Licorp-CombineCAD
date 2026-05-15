@@ -220,9 +220,50 @@ namespace Licorp_CombineCAD.Services
                 });
 
                 var inputPath = string.IsNullOrWhiteSpace(inputOverride) ? validFiles[0] : inputOverride;
-                var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, 300000, cancellationToken);
-                LastLogPath = LastLogPath ?? GetLatestMergeLogPath();
-                return success;
+
+                // Start progress file monitoring in background
+                var progressFilePath = statusPath + ".progress.json";
+                var progressMonitorCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var progressMonitorTask = Task.Run(async () =>
+                {
+                    while (!progressMonitorCts.Token.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            await Task.Delay(1000, progressMonitorCts.Token);
+                            if (File.Exists(progressFilePath))
+                            {
+                                var json = File.ReadAllText(progressFilePath);
+                                var progressData = JsonConvert.DeserializeObject<dynamic>(json);
+                                if (progressData != null)
+                                {
+                                    progress?.Report(new MergeProgressInfo
+                                    {
+                                        Phase = (string)progressData.Phase ?? "Merging",
+                                        CurrentItem = (string)progressData.CurrentItem ?? "",
+                                        Current = (int)progressData.Current,
+                                        Total = (int)progressData.Total
+                                    });
+                                }
+                            }
+                        }
+                        catch (OperationCanceledException) { break; }
+                        catch { }
+                    }
+                }, progressMonitorCts.Token);
+
+                try
+                {
+                    var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, 600000, cancellationToken);
+                    LastLogPath = LastLogPath ?? GetLatestMergeLogPath();
+                    return success;
+                }
+                finally
+                {
+                    progressMonitorCts.Cancel();
+                    try { await progressMonitorTask; } catch { }
+                    TryDeleteTempFile(progressFilePath);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -456,8 +497,16 @@ namespace Licorp_CombineCAD.Services
                     if (process.ExitCode != 0)
                         Trace.WriteLine($"[ACAD-RUN] {engineName} exited with non-zero code {process.ExitCode}; evaluating status/output before failing.");
 
-                    // Give the plugin a short grace period to flush status/output to disk.
-                    await Task.Delay(500, cancellationToken);
+                    var runStatus = await WaitForMergeResultAsync(process, statusPath, outputPath, cancellationToken);
+
+                    LastLogPath = runStatus?.LogPath ?? LastLogPath;
+                    if (runStatus != null && runStatus.Success)
+                    {
+                        LastError = null;
+                        _lastRunReturnedPluginStatus = true;
+                        Trace.WriteLine($"[ACAD-RUN] merge success: output={runStatus.OutputPath}, message={runStatus.Message}");
+                        return true;
+                    }
 
                     return await EvaluateMergeRunResultAsync(engineName, process.ExitCode, outputPath, statusPath, cancellationToken);
                 }
@@ -556,6 +605,73 @@ namespace Licorp_CombineCAD.Services
                 LastError = $"{engineName} exited with code {exitCode}.";
 
             return false;
+        }
+
+        private async Task<MergeStatusDto> WaitForMergeResultAsync(
+            Process process,
+            string statusPath,
+            string expectedOutputPath,
+            CancellationToken cancellationToken)
+        {
+            if (process == null)
+                throw new ArgumentNullException(nameof(process));
+
+            // Ensure process has fully exited before evaluating status/output,
+            // then allow a short window for status JSON/output file flush.
+            await Task.Run(() => process.WaitForExit(), cancellationToken);
+
+            for (int i = 0; i < 20; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!string.IsNullOrWhiteSpace(statusPath) && File.Exists(statusPath))
+                {
+                    try
+                    {
+                        var json = File.ReadAllText(statusPath);
+                        var status = JsonConvert.DeserializeObject<MergeStatusDto>(json);
+
+                        if (status != null)
+                        {
+                            var finalOutput = !string.IsNullOrWhiteSpace(status.OutputPath)
+                                ? status.OutputPath
+                                : expectedOutputPath;
+
+                            if (status.Success && !string.IsNullOrWhiteSpace(finalOutput) && File.Exists(finalOutput))
+                            {
+                                status.OutputPath = finalOutput;
+                                return status;
+                            }
+
+                            if (!status.Success)
+                                return status;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(expectedOutputPath) && File.Exists(expectedOutputPath))
+                {
+                    return new MergeStatusDto
+                    {
+                        Success = true,
+                        OutputPath = expectedOutputPath,
+                        Message = "Output DWG exists even though status file was delayed.",
+                        LogPath = null
+                    };
+                }
+
+                await Task.Delay(500, cancellationToken);
+            }
+
+            return new MergeStatusDto
+            {
+                Success = false,
+                OutputPath = expectedOutputPath,
+                Message = $"Process exited with code {process.ExitCode} but no valid status/output was detected."
+            };
         }
 
         private bool TryRecoverSuccessFromLatestLog(string expectedOutputPath, out string recoveredOutputPath)

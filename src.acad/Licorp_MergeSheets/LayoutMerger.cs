@@ -24,6 +24,115 @@ namespace Licorp_MergeSheets
         private Dictionary<string, Vector3d> _msOffsets = new Dictionary<string, Vector3d>();
         private double _currentMsXOffset = 0.0;
 
+        // Cache for geometry extents to avoid recalculating
+        private Dictionary<string, ExtentsCacheEntry> _extentsCache = new Dictionary<string, ExtentsCacheEntry>(StringComparer.OrdinalIgnoreCase);
+
+        // Cache for PlotSettings to avoid repeated RefreshLists calls
+        private static string _cachedPlotDevice = null;
+
+        private void ReportProgress(MergeConfig config, int current, int total, string layoutName)
+        {
+            try
+            {
+                config?.ProgressCallback?.Invoke(current, total, layoutName);
+
+                if (!string.IsNullOrEmpty(config?.StatusPath))
+                {
+                    var progressData = new
+                    {
+                        Phase = "Merging",
+                        Current = current,
+                        Total = total,
+                        CurrentItem = layoutName,
+                        Percentage = total > 0 ? (double)current / total * 100 : 0,
+                        Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                    };
+                    var dir = Path.GetDirectoryName(config.StatusPath);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                        Directory.CreateDirectory(dir);
+                    File.WriteAllText(config.StatusPath + ".progress.json",
+                        JsonConvert.SerializeObject(progressData, Formatting.Indented));
+                }
+            }
+            catch { }
+        }
+        private static List<string> _cachedCanonicalMedia = null;
+        private static DateTime _cachedMediaAt = DateTime.MinValue;
+        private static readonly TimeSpan MediaCacheExpiry = TimeSpan.FromMinutes(5);
+
+        private void EnsurePlotSettingsRefreshed(Layout layout)
+        {
+            string currentDevice = null;
+            try { currentDevice = layout.PlotConfigurationName; } catch { }
+
+            if (string.IsNullOrEmpty(currentDevice))
+                return;
+
+            bool needsRefresh = _cachedCanonicalMedia == null ||
+                !string.Equals(_cachedPlotDevice, currentDevice, StringComparison.OrdinalIgnoreCase);
+
+            if (needsRefresh)
+            {
+                var psv = PlotSettingsValidator.Current;
+                psv.RefreshLists(layout);
+                try
+                {
+                    var mediaNames = psv.GetCanonicalMediaNameList(layout);
+                    _cachedCanonicalMedia = new List<string>();
+                    foreach (string name in mediaNames)
+                    {
+                        _cachedCanonicalMedia.Add(name);
+                    }
+                    _cachedPlotDevice = currentDevice;
+                    _cachedMediaAt = DateTime.Now;
+                    AcadLogger.LogInfo($"PlotSettings cache: refreshed for device '{currentDevice}', media count={_cachedCanonicalMedia.Count}");
+                }
+                catch (Exception ex)
+                {
+                    AcadLogger.LogWarning($"PlotSettings cache: failed to get media list: {ex.Message}");
+                }
+            }
+        }
+
+        private void ClearPlotSettingsCache()
+        {
+            _cachedPlotDevice = null;
+            _cachedCanonicalMedia = null;
+            _cachedMediaAt = DateTime.MinValue;
+            _mediaSizeCache.Clear();
+        }
+
+        private class ExtentsCacheEntry
+        {
+            public Extents3d Extents { get; set; }
+            public int EntityCount { get; set; }
+            public int ExtentsEntityCount { get; set; }
+            public DateTime CachedAt { get; set; }
+            public bool IsModelSpace { get; set; }
+        }
+
+        private string GetExtentsCacheKey(string filePath, string layoutName)
+        {
+            if (string.IsNullOrEmpty(filePath))
+                return layoutName ?? string.Empty;
+            return (filePath + "|" + (layoutName ?? "Model")).ToLower();
+        }
+
+        private bool TryGetExtentsCache(string key, out ExtentsCacheEntry cache)
+        {
+            return _extentsCache.TryGetValue(key, out cache);
+        }
+
+        private void SetExtentsCache(string key, ExtentsCacheEntry cache)
+        {
+            _extentsCache[key] = cache;
+        }
+
+        private void ClearExtentsCache()
+        {
+            _extentsCache.Clear();
+        }
+
         public bool MergeToMultiLayout(MergeConfig config)
         {
             try
@@ -153,6 +262,9 @@ namespace Licorp_MergeSheets
 
                     int clonedCount = 1;
                     int fileIndex = 2;
+                    var failedLayouts = new List<string>();
+                    int totalToProcess = config.SourceFiles.Count(s => File.Exists(s.Path) && !s.Path.Equals(baseFile, StringComparison.OrdinalIgnoreCase));
+                    int processedCount = 0;
 
                     foreach (var source in config.SourceFiles)
                     {
@@ -174,6 +286,9 @@ namespace Licorp_MergeSheets
                         Vector3d msOffset = Vector3d.ZAxis;
                         Extents3d srcExtents = new Extents3d();
 
+                        try
+                        {
+
                         var sourceDb = new Database(false, true);
                         using (sourceDb)
                         {
@@ -185,6 +300,13 @@ namespace Licorp_MergeSheets
                             using (var outputTrans = outputDb.TransactionManager.StartTransaction())
                             {
                                 RenameBlocksInDb(sourceDb, srcTrans, $"File{fileIndex}_");
+
+                                // Merge layers from source if enabled
+                                if (config.MergeLayers)
+                                {
+                                    int mergedLayers = MergeLayersFromSource(sourceDb, outputDb, srcTrans, outputTrans);
+                                    AcadLogger.LogInfo($"Layer merge result for '{desiredName}': {mergedLayers} layer(s) added");
+                                }
 
                                 var srcMs = (BlockTableRecord)srcTrans.GetObject(
                                     SymbolUtilityServices.GetBlockModelSpaceId(sourceDb), OpenMode.ForRead);
@@ -214,7 +336,53 @@ namespace Licorp_MergeSheets
                                 AcadLogger.LogInfo($"GD1: {desiredName} source visible extents (combined) {FormatExtents(sourceVisibleExtents)}");
 
                                 var msIds = new ObjectIdCollection();
-                                foreach (ObjectId id in srcMs) msIds.Add(id);
+                                foreach (ObjectId id in srcMs)
+                                {
+                                    try
+                                    {
+                                        var msEnt = srcTrans.GetObject(id, OpenMode.ForRead, false) as Entity;
+                                        if (msEnt == null) continue;
+
+                                        // In live-viewport mode, skip BlockReferences that originate from
+                                        // xref / overlay blocks (e.g. Revit-exported sheets embedded as
+                                        // a BlockReference in ModelSpace at viewport scale ~0.01).
+                                        // Cloning them into the output DB makes them appear ON TOP of the
+                                        // recreated Viewport entity so that clicking the drawing area selects
+                                        // a BLOCK REFERENCE instead of the VIEWPORT.
+                                        if (keepViewportLive && msEnt is BlockReference msBr)
+                                        {
+                                            bool isXrefOrOverlay = false;
+                                            bool isAnonymous = false;
+                                            bool isLargeScaleBR = false;
+                                            try
+                                            {
+                                                var btrDef = srcTrans.GetObject(msBr.BlockTableRecord, OpenMode.ForRead) as BlockTableRecord;
+                                                if (btrDef != null)
+                                                {
+                                                    isXrefOrOverlay = btrDef.IsFromExternalReference || btrDef.IsFromOverlayReference;
+                                                    isAnonymous = btrDef.IsAnonymous;
+                                                }
+                                                // Scale < 1 in all axes typically means a "sheet-embedded" block
+                                                // (Revit exports use 1:96 = 0.0104 or similar sub-1 scales)
+                                                double bScale = Math.Abs(msBr.ScaleFactors.X);
+                                                isLargeScaleBR = bScale > 0.0 && bScale < 1.0;
+                                            }
+                                            catch { }
+
+                                            if (isXrefOrOverlay || isAnonymous || isLargeScaleBR)
+                                            {
+                                                AcadLogger.LogInfo(
+                                                    $"GD1: SKIP ModelSpace BlockRef '{msBr.Name}' " +
+                                                    $"xref={isXrefOrOverlay} anon={isAnonymous} smallScale={isLargeScaleBR} " +
+                                                    $"scale={msBr.ScaleFactors.X:F6} (would shadow viewport in output)");
+                                                continue;
+                                            }
+                                        }
+
+                                        msIds.Add(id);
+                                    }
+                                    catch { }
+                                }
 
                                 msOffset = new Vector3d(_currentMsXOffset - viewportViewExtents.MinPoint.X, 0, 0);
                                 _msOffsets[desiredName] = msOffset;
@@ -226,17 +394,17 @@ namespace Licorp_MergeSheets
                                     sourceDb.WblockCloneObjects(
                                         msIds, outputMs.ObjectId, msIdMap, DuplicateRecordCloning.Replace, false);
 
+                                    var transform = Matrix3d.Displacement(msOffset);
                                     foreach (ObjectId srcId in msIds)
                                     {
                                         if (!msIdMap.Contains(srcId)) continue;
                                         ObjectId destId = msIdMap[srcId].Value;
                                         if (destId.IsNull) continue;
-
                                         try
                                         {
                                             var ent = outputTrans.GetObject(destId, OpenMode.ForWrite) as Entity;
                                             if (ent != null)
-                                                ent.TransformBy(Matrix3d.Displacement(msOffset));
+                                                ent.TransformBy(transform);
                                         }
                                         catch { }
                                     }
@@ -302,6 +470,15 @@ namespace Licorp_MergeSheets
                                             continue;
 
                                         if (keepViewportLive && ent is Viewport)
+                                            continue;
+
+                                        // In live viewport mode, avoid cloning PaperSpace block references.
+                                        // They sit on top of viewports and capture clicks/double-clicks (BEDIT),
+                                        // making the user select a BLOCK REFERENCE instead of the MVIEW viewport.
+                                        // Note: ModelSpace BlockReferences are also filtered above (msIds loop)
+                                        // to prevent the same issue for geometry visible through the viewport.
+                                        // EXCEPTION: Title block references must be preserved.
+                                        if (keepViewportLive && ent is BlockReference br && !IsTitleBlockReference(br, srcTrans))
                                             continue;
 
                                         var sourceVp = ent as Viewport;
@@ -382,12 +559,33 @@ namespace Licorp_MergeSheets
                         }
 
                         clonedCount++;
+                        processedCount++;
                         AcadLogger.LogInfo($"Successfully cloned layout '{desiredName}'");
+                        ReportProgress(config, processedCount, totalToProcess, desiredName);
+                        }
+                        catch (System.Exception layoutEx)
+                        {
+                            failedLayouts.Add($"{desiredName}: {layoutEx.Message}");
+                            AcadLogger.LogWarning($"FAILED layout '{desiredName}' from '{Path.GetFileName(source.Path)}': {layoutEx.Message}");
+                        }
                         fileIndex++;
                     }
 
                     clonedCount += EnsurePendingScheduleOnlyLayouts(outputDb, pendingScheduleOnlyLayouts, sourceInfos);
                     AcadLogger.LogInfo($"Total layouts cloned: {clonedCount}");
+
+                    if (failedLayouts.Count > 0)
+                    {
+                        AcadLogger.LogWarning($"ERROR RECOVERY: {failedLayouts.Count}/{totalToProcess} layout(s) failed:");
+                        foreach (var failed in failedLayouts)
+                            AcadLogger.LogWarning($"  - {failed}");
+                    }
+
+                    if (processedCount == 0 && clonedCount <= 1)
+                    {
+                        AcadLogger.LogError("All source layouts failed. No output generated.");
+                        return false;
+                    }
 
                     CleanupDefaultLayouts(outputDb);
                     RemovePaperBackgroundPresentation(outputDb, "MultiLayout");
@@ -396,6 +594,8 @@ namespace Licorp_MergeSheets
 
                     var dwgVersion = GetDwgVersion(config.DwgVersion);
                     outputDb.SaveAs(config.OutputPath, dwgVersion);
+                    ClearExtentsCache();
+                    ClearPlotSettingsCache();
                     AcadLogger.LogInfo($"Saved to: {config.OutputPath}");
 
                     var outputPathForRegen = config.OutputPath;
@@ -546,9 +746,10 @@ clonedIds.Add(idMap[id].Value);
 }
 allClonedIds.Add(clonedIds);
 
-allSourceExtents.Add(GetExtents(sourcePsr));
-allSourceIds.Add(ids);
-allSourceDbs.Add(sourceDb);
+                                var singleLayoutCacheKey = GetExtentsCacheKey(source.Path, source.Layout ?? "Layout1");
+                                allSourceExtents.Add(GetExtents(sourcePsr, singleLayoutCacheKey));
+                                allSourceIds.Add(ids);
+                                allSourceDbs.Add(sourceDb);
 }
                                 else
                                 {
@@ -584,16 +785,19 @@ allSourceDbs.Add(sourceDb);
                             }
 
 var clonedIds = allClonedIds[idx];
-foreach (ObjectId destId in clonedIds)
-{
-var ent = outputTrans.GetObject(destId, OpenMode.ForWrite) as Entity;
-if (ent != null)
-{
-ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOffset - ext.MinPoint.Y, 0)));
-}
-}
-                        
-                        xOffset += width + LayoutSpacing;
+                            var singleTransform = Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOffset - ext.MinPoint.Y, 0));
+                            foreach (ObjectId destId in clonedIds)
+                            {
+                                try
+                                {
+                                    var ent = outputTrans.GetObject(destId, OpenMode.ForWrite) as Entity;
+                                    if (ent != null)
+                                        ent.TransformBy(singleTransform);
+                                }
+                                catch { }
+                            }
+
+                            xOffset += width + LayoutSpacing;
                         AcadLogger.Log($"[LayoutMerger] Offset by ({xOffset}, {yOffset})");
                         }
 
@@ -609,6 +813,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                     var dwgVersion = GetDwgVersion(config.DwgVersion);
                     outputDb.SaveAs(config.OutputPath, dwgVersion);
+                    ClearExtentsCache();
                     AcadLogger.Log($"[LayoutMerger] SingleLayout completed: {config.OutputPath}");
                 }
 
@@ -757,6 +962,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                     var dwgVersion = GetDwgVersion(config.DwgVersion);
                     outputDb.SaveAs(config.OutputPath, dwgVersion);
+                    ClearExtentsCache();
                     AcadLogger.Log($"[LayoutMerger] ModelSpace merge completed: {config.OutputPath}");
                 }
 
@@ -933,11 +1139,65 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
                 File.WriteAllText(config.SheetSetIndexPath, JsonConvert.SerializeObject(index, Formatting.Indented));
                 AcadLogger.LogInfo($"Combined DWG index written: {config.SheetSetIndexPath}");
+
+                // Create actual DST file for AutoCAD Sheet Set Manager
+                var dstPath = Path.ChangeExtension(config.SheetSetIndexPath, ".dst");
+                CreateSheetSetDstFile(dstPath, config);
             }
             catch (System.Exception ex)
             {
                 AcadLogger.LogWarning($"Combined DWG index failed: {ex.Message}");
             }
+        }
+
+        private void CreateSheetSetDstFile(string dstPath, MergeConfig config)
+        {
+            try
+            {
+                var sheetSetName = Path.GetFileNameWithoutExtension(config.OutputPath ?? "Combined");
+                var sheets = config.SourceFiles ?? new List<SourceFile>();
+                var dwgRelativePath = Path.GetFileName(config.OutputPath ?? "output.dwg");
+
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+                sb.AppendLine("<!-- AutoCAD Sheet Set Manager DST file -->");
+                sb.AppendLine("<SheetSet xmlns=\"http://www.autodesk.com/SheetSet\">");
+                sb.AppendLine($"  <Name>{EscapeXml(sheetSetName)}</Name>");
+                sb.AppendLine($"  <Description>Merged from {sheets.Count} sheets by Licorp CombineCAD</Description>");
+                sb.AppendLine($"  <OutputDwg>{EscapeXml(dwgRelativePath)}</OutputDwg>");
+                sb.AppendLine($"  <CreatedAt>{DateTime.Now:yyyy-MM-dd HH:mm:ss}</CreatedAt>");
+                sb.AppendLine("  <Sheets>");
+
+                for (int i = 0; i < sheets.Count; i++)
+                {
+                    var s = sheets[i];
+                    var layoutName = s.Layout ?? $"Layout{i + 1}";
+                    var sourceName = Path.GetFileNameWithoutExtension(s.Path ?? "");
+                    sb.AppendLine($"    <Sheet>");
+                    sb.AppendLine($"      <Index>{i + 1}</Index>");
+                    sb.AppendLine($"      <Name>{EscapeXml(layoutName)}</Name>");
+                    sb.AppendLine($"      <Description>From: {EscapeXml(sourceName)}</Description>");
+                    sb.AppendLine($"      <Layout>{EscapeXml(layoutName)}</Layout>");
+                    sb.AppendLine($"      <DwgFile>{EscapeXml(dwgRelativePath)}</DwgFile>");
+                    sb.AppendLine($"    </Sheet>");
+                }
+
+                sb.AppendLine("  </Sheets>");
+                sb.AppendLine("</SheetSet>");
+
+                File.WriteAllText(dstPath, sb.ToString(), System.Text.Encoding.UTF8);
+                AcadLogger.LogInfo($"Sheet Set DST file created: {dstPath}");
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"Sheet Set DST creation failed: {ex.Message}");
+            }
+        }
+
+        private static string EscapeXml(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            return text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;").Replace("'", "&apos;");
         }
 
         public void HandleRasterImages(MergeConfig config)
@@ -947,32 +1207,83 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                 if (config == null || string.IsNullOrWhiteSpace(config.OutputPath) || !File.Exists(config.OutputPath))
                     return;
 
-                if (!string.Equals(config.RasterImageMode, "EmbedAsOle", StringComparison.OrdinalIgnoreCase))
-                {
-                    AcadLogger.LogInfo($"Raster image handling skipped: mode={config.RasterImageMode}");
-                    return;
-                }
-
                 var rasterInfos = ScanRasterImages(config.OutputPath);
                 AcadLogger.LogInfo($"Raster image scan: mode={config.RasterImageMode}, count={rasterInfos.Count}");
 
                 if (rasterInfos.Count == 0)
                 {
-                    AcadLogger.LogInfo("Raster OLE embed requested, but no raster image entities were found.");
+                    AcadLogger.LogInfo("No raster image entities found.");
                     return;
                 }
 
-                foreach (var info in rasterInfos)
+                // Mode: CopyAlongside - copy raster files to output folder
+                if (string.Equals(config.RasterImageMode, "CopyAlongside", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(config.RasterImageMode, "KeepReference", StringComparison.OrdinalIgnoreCase))
                 {
-                    AcadLogger.LogWarning(
-                        $"Raster OLE embed fallback: handle={info.Handle}, owner={info.Owner}, layer={info.Layer}. " +
-                        "AutoCAD .NET API did not expose a stable OLE writer in this runtime; keeping raster reference.");
+                    CopyRasterFilesAlongside(config, rasterInfos);
+                    return;
                 }
+
+                // Mode: EmbedAsOle - attempt OLE embed, fallback to copy
+                if (string.Equals(config.RasterImageMode, "EmbedAsOle", StringComparison.OrdinalIgnoreCase))
+                {
+                    AcadLogger.LogInfo("OLE embed not available in .NET API; falling back to copy alongside.");
+                    CopyRasterFilesAlongside(config, rasterInfos);
+                    return;
+                }
+
+                AcadLogger.LogInfo($"Raster image handling: mode={config.RasterImageMode}, no action taken.");
             }
             catch (System.Exception ex)
             {
                 AcadLogger.LogWarning($"Raster image handling failed: {ex.Message}");
             }
+        }
+
+        private void CopyRasterFilesAlongside(MergeConfig config, List<RasterImageInfo> rasterInfos)
+        {
+            var outputDir = Path.GetDirectoryName(config.OutputPath);
+            var sourceFileDirs = (config.SourceFiles ?? new List<SourceFile>())
+                .Where(s => !string.IsNullOrEmpty(s.Path))
+                .Select(s => Path.GetDirectoryName(s.Path))
+                .Where(d => !string.IsNullOrEmpty(d))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            int copiedCount = 0;
+            var copiedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var rasterExtensions = new[] { ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".gif", ".pcx", ".tga", ".rlc" };
+
+            foreach (var srcDir in sourceFileDirs)
+            {
+                try
+                {
+                    foreach (var ext in rasterExtensions)
+                    {
+                        var rasterFiles = Directory.GetFiles(srcDir, "*" + ext, SearchOption.TopDirectoryOnly);
+                        foreach (var rasterFile in rasterFiles)
+                        {
+                            var fileName = Path.GetFileName(rasterFile);
+                            if (copiedFiles.Contains(fileName))
+                                continue;
+
+                            var destPath = Path.Combine(outputDir, fileName);
+                            if (!File.Exists(destPath))
+                            {
+                                File.Copy(rasterFile, destPath, false);
+                                copiedCount++;
+                            }
+                            copiedFiles.Add(fileName);
+                        }
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    AcadLogger.LogWarning($"Raster copy from '{srcDir}' failed: {ex.Message}");
+                }
+            }
+
+            AcadLogger.LogInfo($"Raster files copied alongside DWG: {copiedCount} file(s) to {outputDir}");
         }
 
         // ============ HELPER METHODS ============
@@ -1071,6 +1382,57 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             tr.AddNewlyCreatedDBObject(newLayer, true);
             AcadLogger.LogInfo($"VIEWPORT LAYER: created non-plot layer '{ViewportLayerName}'");
             return layerId;
+        }
+
+        private int MergeLayersFromSource(Database sourceDb, Database outputDb, Transaction sourceTr, Transaction outputTr)
+        {
+            int mergedCount = 0;
+            try
+            {
+                var srcLayers = (LayerTable)sourceTr.GetObject(sourceDb.LayerTableId, OpenMode.ForRead);
+                var outLayers = (LayerTable)outputTr.GetObject(outputDb.LayerTableId, OpenMode.ForRead);
+
+                foreach (ObjectId srcLayerId in srcLayers)
+                {
+                    try
+                    {
+                        var srcLayer = (LayerTableRecord)sourceTr.GetObject(srcLayerId, OpenMode.ForRead);
+                        string layerName = srcLayer.Name;
+
+                        if (string.IsNullOrEmpty(layerName))
+                            continue;
+
+                        if (!outLayers.Has(layerName))
+                        {
+                            outLayers.UpgradeOpen();
+                            var newLayer = new LayerTableRecord
+                            {
+                                Name = layerName,
+                                Color = srcLayer.Color,
+                                IsPlottable = srcLayer.IsPlottable,
+                                IsFrozen = false,
+                                IsOff = false
+                            };
+
+                            try { newLayer.LineWeight = srcLayer.LineWeight; } catch { }
+                            try { newLayer.LinetypeObjectId = srcLayer.LinetypeObjectId; } catch { }
+
+                            outLayers.Add(newLayer);
+                            outputTr.AddNewlyCreatedDBObject(newLayer, true);
+                            mergedCount++;
+                        }
+                    }
+                    catch { }
+                }
+
+                if (mergedCount > 0)
+                    AcadLogger.LogInfo($"Layer merge: {mergedCount} new layer(s) added from source");
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"Layer merge partial failure: {ex.Message}");
+            }
+            return mergedCount;
         }
 
         private int AddWhitePaperBackgrounds(Database db, Transaction tr)
@@ -1184,7 +1546,8 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
         private Extents3d GetLayoutPaperFallbackExtents(Layout layout, BlockTableRecord paperSpace, Transaction tr)
         {
             int extentEntities;
-            var bounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities);
+            string cacheKey = layout != null ? GetExtentsCacheKey(null, layout.LayoutName + "_fallback") : null;
+            var bounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities, cacheKey);
             bool hasBounds = IsUsableExtents(bounds);
 
             double maxViewArea = 0.0;
@@ -1262,7 +1625,8 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                     return;
 
                 int extentEntities;
-                var contentBounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities);
+                string paperCacheKey = GetExtentsCacheKey(null, layoutName + "_paper");
+                var contentBounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities, paperCacheKey);
                 bool hasContentBounds = IsUsableExtents(contentBounds);
 
                 // Normalize title-sheet geometry to paper origin before resolving page setup.
@@ -1280,7 +1644,7 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                             $"move=({shiftX:F4},{shiftY:F4}), moved={moved}");
 
                         // Recompute after transform so the selected media matches final geometry.
-                        contentBounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities);
+                        contentBounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities, paperCacheKey + "_after");
                         hasContentBounds = IsUsableExtents(contentBounds);
                     }
                 }
@@ -1321,15 +1685,15 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                     return;
                 }
 
-                AcadLogger.LogWarning(
-                    $"{phase}: Page setup paper mismatch for '{layoutName}', " +
+                AcadLogger.LogInfo(
+                    $"{phase}: Page setup paper mismatch (auto-adjusting) for '{layoutName}', " +
                     $"paper=({currentWidth:F2}, {currentHeight:F2}), title=({width:F2}, {height:F2}), " +
                     $"bounds={FormatExtents(fallback)}, extentEntities={extentEntities}");
 
                 try
                 {
+                    EnsurePlotSettingsRefreshed(layout);
                     var psv = PlotSettingsValidator.Current;
-                    psv.RefreshLists(layout);
 
                     string selectedMedia = SelectBestCanonicalMedia(psv, layout, width, height);
                     if (!string.IsNullOrWhiteSpace(selectedMedia))
@@ -1409,8 +1773,8 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                 try
                 {
                     HostApplicationServices.WorkingDatabase = db;
+                    EnsurePlotSettingsRefreshed(layout);
                     var psv = PlotSettingsValidator.Current;
-                    psv.RefreshLists(layout);
 
                     string selectedMedia = SelectBestCanonicalMedia(psv, layout, width, height);
                     if (!string.IsNullOrWhiteSpace(selectedMedia))
@@ -1455,6 +1819,9 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             return titleBounds;
         }
 
+        // Cache for media sizes to avoid repeated SetCanonicalMediaName calls
+        private static Dictionary<string, Tuple<double, double>> _mediaSizeCache = new Dictionary<string, Tuple<double, double>>(StringComparer.OrdinalIgnoreCase);
+
         private string SelectBestCanonicalMedia(
             PlotSettingsValidator psv,
             Layout layout,
@@ -1471,33 +1838,46 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             try
             {
                 var mediaNames = psv.GetCanonicalMediaNameList(layout);
-                foreach (string mediaName in mediaNames)
-                {
-                    if (string.IsNullOrWhiteSpace(mediaName))
-                        continue;
 
-                    try
+                // First pass: populate cache for uncached media
+                if (_mediaSizeCache.Count == 0)
+                {
+                    foreach (string mediaName in mediaNames)
                     {
-                        psv.SetCanonicalMediaName(layout, mediaName);
-                        double mw = layout.PlotPaperSize.X;
-                        double mh = layout.PlotPaperSize.Y;
-                        if (mw < 1.0 || mh < 1.0)
+                        if (string.IsNullOrWhiteSpace(mediaName) || _mediaSizeCache.ContainsKey(mediaName))
                             continue;
 
-                        double d1 = Math.Abs(mw - requiredWidth) + Math.Abs(mh - requiredHeight);
-                        double d2 = Math.Abs(mw - requiredHeight) + Math.Abs(mh - requiredWidth);
-                        double score = Math.Min(d1, d2);
-
-                        if (score < bestScore)
+                        try
                         {
-                            bestScore = score;
-                            best = mediaName;
+                            psv.SetCanonicalMediaName(layout, mediaName);
+                            double mw = layout.PlotPaperSize.X;
+                            double mh = layout.PlotPaperSize.Y;
+                            if (mw >= 1.0 && mh >= 1.0)
+                                _mediaSizeCache[mediaName] = Tuple.Create(mw, mh);
                         }
-
-                        if (score <= exactTol)
-                            break;
+                        catch { }
                     }
-                    catch { }
+                    AcadLogger.LogInfo($"Media size cache populated: {_mediaSizeCache.Count} entries");
+                }
+
+                // Second pass: find best match from cache
+                foreach (var kvp in _mediaSizeCache)
+                {
+                    double mw = kvp.Value.Item1;
+                    double mh = kvp.Value.Item2;
+
+                    double d1 = Math.Abs(mw - requiredWidth) + Math.Abs(mh - requiredHeight);
+                    double d2 = Math.Abs(mw - requiredHeight) + Math.Abs(mh - requiredWidth);
+                    double score = Math.Min(d1, d2);
+
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        best = kvp.Key;
+                    }
+
+                    if (score <= exactTol)
+                        break;
                 }
             }
             finally
@@ -1688,7 +2068,8 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             IReadOnlyList<ViewportInfo> viewports,
             out int extentEntities)
         {
-            var bounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities);
+            string cacheKey = layout != null ? GetExtentsCacheKey(null, layout.LayoutName + "_sheetbounds") : null;
+            var bounds = GetPaperEntityExtentsExcludingViewports(paperSpace, tr, out extentEntities, cacheKey);
             bool hasBounds = IsUsableExtents(bounds);
 
             if (viewports != null)
@@ -1723,8 +2104,14 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
             return bounds;
         }
 
-        private Extents3d GetPaperEntityExtentsExcludingViewports(BlockTableRecord paperSpace, Transaction tr, out int extentsEntityCount)
+        private Extents3d GetPaperEntityExtentsExcludingViewports(BlockTableRecord paperSpace, Transaction tr, out int extentsEntityCount, string cacheKey = null)
         {
+            if (!string.IsNullOrEmpty(cacheKey) && TryGetExtentsCache(cacheKey, out var cached))
+            {
+                extentsEntityCount = cached.ExtentsEntityCount;
+                return cached.Extents;
+            }
+
             double minX = double.MaxValue, minY = double.MaxValue;
             double maxX = double.MinValue, maxY = double.MinValue;
             extentsEntityCount = 0;
@@ -1756,13 +2143,25 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                 }
             }
 
-            if (sheetCandidates.Count > 0)
-                return SelectBestTitleSheetCandidate(sheetCandidates);
+            var result = sheetCandidates.Count > 0
+                ? SelectBestTitleSheetCandidate(sheetCandidates)
+                : (minX == double.MaxValue
+                    ? new Extents3d(Point3d.Origin, Point3d.Origin)
+                    : new Extents3d(new Point3d(minX, minY, 0.0), new Point3d(maxX, maxY, 0.0)));
 
-            if (minX == double.MaxValue)
-                return new Extents3d(Point3d.Origin, Point3d.Origin);
+            if (!string.IsNullOrEmpty(cacheKey))
+            {
+                SetExtentsCache(cacheKey, new ExtentsCacheEntry
+                {
+                    Extents = result,
+                    EntityCount = 0,
+                    ExtentsEntityCount = extentsEntityCount,
+                    CachedAt = DateTime.Now,
+                    IsModelSpace = false
+                });
+            }
 
-            return new Extents3d(new Point3d(minX, minY, 0.0), new Point3d(maxX, maxY, 0.0));
+            return result;
         }
 
         private bool TryGetTitleSheetBounds(Entity ent, out Extents3d bounds)
@@ -1813,6 +2212,32 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
 
             double area = w * h;
             return area >= 25000.0;
+        }
+
+        private static readonly HashSet<string> TitleBlockKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "TITLE", "TITLEBLOCK", "TITLE_BLOCK", "SHEET", "SHEETBLOCK", "SHEET_BLOCK",
+            "BORDER", "FRAME", "TITLEBAR", "KHUDEN", "KHUNG"
+        };
+
+        private bool IsTitleBlockReference(BlockReference br, Transaction tr)
+        {
+            try
+            {
+                string blockName = br.Name ?? "";
+                if (TitleBlockKeywords.Any(kw => blockName.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0))
+                    return true;
+
+                try
+                {
+                    var ext = br.GeometricExtents;
+                    if (IsReasonableSheetBounds(ext))
+                        return true;
+                }
+                catch { }
+            }
+            catch { }
+            return false;
         }
 
         private Extents3d SelectBestTitleSheetCandidate(List<Extents3d> candidates)
@@ -2146,7 +2571,8 @@ ent.TransformBy(Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOf
                             }
 
                             int extentsCount;
-                            var paperExtents = GetExtents(paperSpace, tr, out extentsCount);
+                            var layoutCacheKey = GetExtentsCacheKey(null, entry.Key);
+                            var paperExtents = GetExtents(paperSpace, tr, out extentsCount, layoutCacheKey);
 
                             layoutInfos.Add(new LayoutRegenInfo
                             {
@@ -2326,9 +2752,12 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 var sourceModelSpace = (BlockTableRecord)sourceTrans.GetObject(
                     SymbolUtilityServices.GetBlockModelSpaceId(sourceDb), OpenMode.ForRead);
 
+                var modelEntityExtents = BuildModelEntityExtentsCache(sourceTrans, sourceModelSpace, layoutName, out int modelEntityCount, out int modelNoExtentsCount);
+
                 AcadLogger.LogInfo(
                     $"BAKE: Start '{layoutName}' sourceVpCount={sourceViewports.Count}, " +
-                    $"sameDb={object.ReferenceEquals(sourceDb, outputDb)}, destPaperSpace={destPaperSpace.ObjectId}");
+                    $"sameDb={object.ReferenceEquals(sourceDb, outputDb)}, destPaperSpace={destPaperSpace.ObjectId}, " +
+                    $"cachedEntities={modelEntityCount}, noExtents={modelNoExtentsCount}");
 
                 for (int i = 0; i < sourceViewports.Count; i++)
                 {
@@ -2350,7 +2779,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                     int scannedCount;
                     int noExtentsCount;
                     var idsToBake = CollectModelEntityIdsForViewport(
-                        sourceTrans, sourceModelSpace, searchExtents, out scannedCount, out noExtentsCount);
+                        modelEntityExtents, searchExtents, out scannedCount, out noExtentsCount);
 
                     AcadLogger.LogInfo(
                         $"BAKE: '{layoutName}' viewport {i + 1}/{sourceViewports.Count} " +
@@ -2458,8 +2887,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
         }
 
         private ObjectIdCollection CollectModelEntityIdsForViewport(
-            Transaction trans,
-            BlockTableRecord modelSpace,
+            IReadOnlyList<ModelEntityExtents> modelEntityExtents,
             Extents3d searchExtents,
             out int scannedCount,
             out int noExtentsCount)
@@ -2468,19 +2896,45 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             scannedCount = 0;
             noExtentsCount = 0;
 
-            foreach (ObjectId id in modelSpace)
+            if (modelEntityExtents == null || modelEntityExtents.Count == 0)
+                return ids;
+
+            foreach (var item in modelEntityExtents)
             {
                 scannedCount++;
 
+                if (ExtentsIntersect(item.Extents, searchExtents))
+                    ids.Add(item.Id);
+            }
+
+            return ids;
+        }
+
+        private List<ModelEntityExtents> BuildModelEntityExtentsCache(
+            Transaction trans,
+            BlockTableRecord modelSpace,
+            string layoutName,
+            out int entityCount,
+            out int noExtentsCount)
+        {
+            var result = new List<ModelEntityExtents>();
+            entityCount = 0;
+            noExtentsCount = 0;
+
+            foreach (ObjectId id in modelSpace)
+            {
+                entityCount++;
                 try
                 {
                     var ent = trans.GetObject(id, OpenMode.ForRead, false) as Entity;
                     if (ent == null || ent.IsErased)
                         continue;
 
-                    var entExtents = ent.GeometricExtents;
-                    if (ExtentsIntersect(entExtents, searchExtents))
-                        ids.Add(id);
+                    result.Add(new ModelEntityExtents
+                    {
+                        Id = id,
+                        Extents = ent.GeometricExtents
+                    });
                 }
                 catch
                 {
@@ -2488,7 +2942,16 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 }
             }
 
-            return ids;
+            AcadLogger.LogInfo(
+                $"BAKE: '{layoutName}' built extents cache entities={entityCount}, cached={result.Count}, noExtents={noExtentsCount}");
+
+            return result;
+        }
+
+        private sealed class ModelEntityExtents
+        {
+            public ObjectId Id { get; set; }
+            public Extents3d Extents { get; set; }
         }
 
         private int EraseAllLayoutViewports(Transaction trans, BlockTableRecord paperSpace, string layoutName)
@@ -2886,8 +3349,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
 
                     try
                     {
-                        var psv = PlotSettingsValidator.Current;
-                        psv.RefreshLists(layout);
+                        EnsurePlotSettingsRefreshed(layout);
                     }
                     catch (System.Exception psvEx)
                     {
@@ -3605,6 +4067,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         paperSpace.AppendEntity(vp);
                         trans.AddNewlyCreatedDBObject(vp, true);
 
+                        // Match MVIEW-like behavior by putting created viewports on the dedicated viewport layer.
                         vp.LayerId = viewportLayerId;
                         vp.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                             Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
@@ -3642,7 +4105,8 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         vp.NonRectClipOn = false;
                         vp.Locked = false;
 
-                        vp.On = true;
+                        // Preserve source ON/OFF state instead of forcing ON.
+                        vp.On = sourceViewport.On;
                         vp.UpdateDisplay();
 
                         vp.Locked = sourceViewport.Locked;
@@ -3975,6 +4439,19 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
 
         private DwgGeometryStats GetModelSpaceStats(Database db, Transaction trans)
         {
+            string filePath = db.Filename ?? string.Empty;
+            string cacheKey = GetExtentsCacheKey(filePath, "Model");
+
+            if (TryGetExtentsCache(cacheKey, out var cached))
+            {
+                return new DwgGeometryStats
+                {
+                    EntityCount = cached.EntityCount,
+                    ExtentsEntityCount = cached.ExtentsEntityCount,
+                    Extents = cached.Extents
+                };
+            }
+
             var modelSpace = (BlockTableRecord)trans.GetObject(
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
 
@@ -3987,6 +4464,15 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
 
             int extentsEntityCount;
             var extents = GetExtents(modelSpace, trans, out extentsEntityCount);
+
+            SetExtentsCache(cacheKey, new ExtentsCacheEntry
+            {
+                Extents = extents,
+                EntityCount = entityCount,
+                ExtentsEntityCount = extentsEntityCount,
+                CachedAt = DateTime.Now,
+                IsModelSpace = true
+            });
 
             return new DwgGeometryStats
             {
@@ -4128,8 +4614,8 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
 
                     try
                     {
+                        EnsurePlotSettingsRefreshed(destLayout);
                         var psv = PlotSettingsValidator.Current;
-                        psv.RefreshLists(destLayout);
 
                         if (!string.IsNullOrWhiteSpace(sourcePlotSettings.PlotConfigurationName) &&
                             !string.IsNullOrWhiteSpace(sourcePlotSettings.CanonicalMediaName))
@@ -4302,8 +4788,13 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             return result;
         }
 
-        private Extents3d GetExtents(BlockTableRecord btr)
+        private Extents3d GetExtents(BlockTableRecord btr, string cacheKey = null)
         {
+            if (!string.IsNullOrEmpty(cacheKey) && TryGetExtentsCache(cacheKey, out var cached))
+            {
+                return cached.Extents;
+            }
+
             double minX = double.MaxValue, minY = double.MaxValue;
             double maxX = double.MinValue, maxY = double.MinValue;
 
@@ -4324,14 +4815,35 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 catch { }
             }
 
+            Extents3d result;
             if (minX == double.MaxValue)
-                return new Extents3d(new Point3d(0, 0, 0), new Point3d(0, 0, 0));
+                result = new Extents3d(new Point3d(0, 0, 0), new Point3d(0, 0, 0));
+            else
+                result = new Extents3d(new Point3d(minX, minY, 0), new Point3d(maxX, maxY, 0));
 
-            return new Extents3d(new Point3d(minX, minY, 0), new Point3d(maxX, maxY, 0));
+            if (!string.IsNullOrEmpty(cacheKey))
+            {
+                SetExtentsCache(cacheKey, new ExtentsCacheEntry
+                {
+                    Extents = result,
+                    EntityCount = 0,
+                    ExtentsEntityCount = 0,
+                    CachedAt = DateTime.Now,
+                    IsModelSpace = false
+                });
+            }
+
+            return result;
         }
 
-        private Extents3d GetExtents(BlockTableRecord btr, Transaction trans, out int extentsEntityCount)
+        private Extents3d GetExtents(BlockTableRecord btr, Transaction trans, out int extentsEntityCount, string cacheKey = null)
         {
+            if (!string.IsNullOrEmpty(cacheKey) && TryGetExtentsCache(cacheKey, out var cached))
+            {
+                extentsEntityCount = cached.ExtentsEntityCount;
+                return cached.Extents;
+            }
+
             double minX = double.MaxValue, minY = double.MaxValue;
             double maxX = double.MinValue, maxY = double.MinValue;
             extentsEntityCount = 0;
@@ -4356,10 +4868,25 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                 }
             }
 
+            Extents3d result;
             if (minX == double.MaxValue)
-                return new Extents3d(new Point3d(0, 0, 0), new Point3d(0, 0, 0));
+                result = new Extents3d(new Point3d(0, 0, 0), new Point3d(0, 0, 0));
+            else
+                result = new Extents3d(new Point3d(minX, minY, 0), new Point3d(maxX, maxY, 0));
 
-            return new Extents3d(new Point3d(minX, minY, 0), new Point3d(maxX, maxY, 0));
+            if (!string.IsNullOrEmpty(cacheKey))
+            {
+                SetExtentsCache(cacheKey, new ExtentsCacheEntry
+                {
+                    Extents = result,
+                    EntityCount = extentsEntityCount,
+                    ExtentsEntityCount = extentsEntityCount,
+                    CachedAt = DateTime.Now,
+                    IsModelSpace = false
+                });
+            }
+
+            return result;
         }
 
         private DwgVersion GetDwgVersion(string version)

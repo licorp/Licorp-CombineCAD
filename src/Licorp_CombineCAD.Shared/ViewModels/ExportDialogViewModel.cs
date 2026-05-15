@@ -49,6 +49,7 @@ namespace Licorp_CombineCAD.ViewModels
         private string _selectedVerticalAlignment = "Top";
         private string _fileNameTemplate = "{SheetNumber} - {SheetName}";
         private string _statusMessage = "";
+        private string _licenseStateText = "Licensed";
         private string _projectName = "Project";
         private string _projectNumber = "PRJ-001";
         private ExportMode _exportMode = ExportMode.MultiLayout;
@@ -229,6 +230,12 @@ namespace Licorp_CombineCAD.ViewModels
             set { _statusMessage = value; OnPropertyChanged(); }
         }
 
+        public string LicenseStateText
+        {
+            get => _licenseStateText;
+            set { _licenseStateText = value; OnPropertyChanged(); }
+        }
+
         public bool IsAutoCADAvailable { get; private set; }
         public string AutoCADVersion { get; private set; }
         public string AutoCADPath { get; private set; }
@@ -353,6 +360,15 @@ namespace Licorp_CombineCAD.ViewModels
             _isClosing = true;
             try { _cancellationTokenSource?.Cancel(); } catch { }
             try { _revitThreadService?.Dispose(); } catch { }
+        }
+
+        internal void SetLicenseState(string stateText, string detail)
+        {
+            LicenseStateText = string.IsNullOrWhiteSpace(stateText) ? "Licensed" : stateText;
+            if (!string.IsNullOrWhiteSpace(detail))
+            {
+                StatusMessage = detail;
+            }
         }
     }
 

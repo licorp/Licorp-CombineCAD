@@ -25,6 +25,26 @@ namespace Licorp_CombineCAD.Views
             Closing += ExportDialog_Closing;
         }
 
+        internal void SetLicenseBanner(Services.LicenseState state, string detail)
+        {
+            if (DataContext is ExportDialogViewModel vm)
+            {
+                vm.SetLicenseState(MapStateText(state), detail);
+            }
+        }
+
+        private static string MapStateText(Services.LicenseState state)
+        {
+            switch (state)
+            {
+                case Services.LicenseState.GraceMode: return "Grace mode";
+                case Services.LicenseState.Expired: return "Expired";
+                case Services.LicenseState.Revoked: return "Revoked";
+                case Services.LicenseState.Unlicensed: return "Unlicensed";
+                default: return "Licensed";
+            }
+        }
+
         private async void ExportDialog_Loaded(object sender, RoutedEventArgs e)
         {
             if (DataContext is ExportDialogViewModel vm)

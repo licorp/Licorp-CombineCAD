@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Text;
 using Licorp_CombineCAD.Models;
 using Licorp_CombineCAD.Services;
 using Licorp_CombineCAD.Views;
@@ -191,6 +192,34 @@ namespace Licorp_CombineCAD.ViewModels
                             layoutNames = exportedFiles.Select(Path.GetFileNameWithoutExtension).ToList();
 
                         var outputPath = GetUniqueOutputPath();
+
+                        // Show merge preview dialog
+                        var previewConfirmed = await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            var previewMsg = $"Merge Preview ({ExportMode} mode):\n\n" +
+                                $"Source files: {exportedFiles.Count}\n" +
+                                $"Output: {outputPath}\n\n" +
+                                "Sheets to merge:\n";
+
+                            for (int i = 0; i < Math.Min(layoutNames.Count, exportedFiles.Count); i++)
+                                previewMsg += $"  {i + 1}. {layoutNames[i]}\n";
+
+                            if (layoutNames.Count > 10)
+                                previewMsg += $"  ... and {layoutNames.Count - 10} more\n";
+
+                            previewMsg += "\nProceed with merge?";
+
+                            return MessageBox.Show(previewMsg, "Merge Preview",
+                                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+                        });
+
+                        if (!previewConfirmed)
+                        {
+                            StatusMessage = "Merge cancelled by user.";
+                            IsExporting = false;
+                            return;
+                        }
+
                         var mergeSuccess = false;
 
                         switch (ExportMode)
@@ -209,6 +238,34 @@ namespace Licorp_CombineCAD.ViewModels
                         if (mergeSuccess)
                         {
                             StatusMessage = string.Format("Merged {0} files to {1}", exportedFiles.Count, Path.GetFileName(outputPath));
+
+                            var finalOutputPath = outputPath;
+                            if (!IsLikelyValidCombinedDwg(finalOutputPath, out var validateReason))
+                            {
+                                var logPath = mergeService.LastLogPath;
+                                await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    MessageBox.Show(
+                                        "AutoCAD reported success but the output file still looks invalid.\n\n"
+                                        + validateReason
+                                        + (string.IsNullOrWhiteSpace(logPath) ? "" : "\n\nLog: " + logPath),
+                                        "Merge Warning",
+                                        MessageBoxButton.OK,
+                                        MessageBoxImage.Warning);
+                                }));
+                            }
+                            else
+                            {
+                                await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    MessageBox.Show(
+                                        "Merge thành công.\n\nDWG: " + finalOutputPath,
+                                        "Merge Completed",
+                                        MessageBoxButton.OK,
+                                        MessageBoxImage.Information);
+                                }));
+                            }
+
                             if (OpenAfterExport)
                                 fileToOpen = outputPath;
                         }
@@ -326,6 +383,58 @@ namespace Licorp_CombineCAD.ViewModels
             }
 
             return true;
+        }
+
+        private bool IsLikelyValidCombinedDwg(string path, out string reason)
+        {
+            reason = null;
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                reason = "Output path is empty.";
+                return false;
+            }
+
+            if (!File.Exists(path))
+            {
+                reason = "Output file does not exist.";
+                return false;
+            }
+
+            var fi = new FileInfo(path);
+            if (fi.Length < 4096)
+            {
+                reason = $"Output file too small: {fi.Length} bytes.";
+                return false;
+            }
+
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    var header = new byte[6];
+                    var read = fs.Read(header, 0, header.Length);
+                    if (read < 6)
+                    {
+                        reason = "Cannot read DWG header.";
+                        return false;
+                    }
+
+                    var signature = Encoding.ASCII.GetString(header);
+                    if (!signature.StartsWith("AC", StringComparison.Ordinal))
+                    {
+                        reason = $"Unexpected DWG signature: {signature}";
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                reason = ex.Message;
+                return false;
+            }
         }
 
         private string BuildPreflightMessage(SheetPreflightResult result)

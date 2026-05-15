@@ -123,9 +123,7 @@ namespace Licorp_MergeSheets
                 if (success && config.VerifyAfterSave)
                 {
                     AcadLogger.LogSection("Post-Save Verification");
-                    // Tạm thời vô hiệu hóa kiểm tra VerifyCombinedFile để tránh báo ảo "passed" khi viewport lỗi hiển thị
-                    // success = merger.VerifyCombinedFile(config, out statusMessage);
-                    AcadLogger.LogInfo("Verification bypassed temporarily for viewport rendering debugging.");
+                    success = merger.VerifyCombinedFile(config, out statusMessage);
                 }
 
                 if (success)
