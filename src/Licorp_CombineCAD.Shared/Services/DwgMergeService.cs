@@ -254,9 +254,27 @@ namespace Licorp_CombineCAD.Services
 
                 try
                 {
-                    var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, 600000, cancellationToken);
-                    LastLogPath = LastLogPath ?? GetLatestMergeLogPath();
-                    return success;
+                    MergeConfigMutex.WaitOne();
+                    try
+                    {
+                        CopyConfigToFixedPath(configPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.WriteLine($"[Merge] Failed to copy config to fixed path: {ex.Message}");
+                    }
+
+                    try
+                    {
+                        var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, 600000, cancellationToken);
+                        LastLogPath = LastLogPath ?? GetLatestMergeLogPath();
+                        return success;
+                    }
+                    finally
+                    {
+                        CleanupFixedConfigPath();
+                        MergeConfigMutex.ReleaseMutex();
+                    }
                 }
                 finally
                 {
@@ -321,11 +339,10 @@ namespace Licorp_CombineCAD.Services
             return JsonConvert.SerializeObject(config, Formatting.Indented);
         }
 
+        private static readonly Mutex MergeConfigMutex = new Mutex(false, "Global\\Licorp_MergeSheets_Config");
+
         private void CreateMergeScript(string scriptPath, string configPath)
         {
-            var silentConfigPath = Path.Combine(Path.GetTempPath(), "Licorp_MergeSheets_Config.json");
-            File.Copy(configPath, silentConfigPath, true);
-
             var lines = new List<string>
             {
                 "_SECURELOAD",
@@ -338,8 +355,19 @@ namespace Licorp_CombineCAD.Services
             };
 
             File.WriteAllLines(scriptPath, lines);
-            Trace.WriteLine($"[ACAD-RUN] silentConfigPath={silentConfigPath}");
             Trace.WriteLine($"[ACAD-RUN] scriptLines={string.Join(" | ", lines)}");
+        }
+
+        private void CopyConfigToFixedPath(string configPath)
+        {
+            var silentConfigPath = Path.Combine(Path.GetTempPath(), "Licorp_MergeSheets_Config.json");
+            File.Copy(configPath, silentConfigPath, true);
+            Trace.WriteLine($"[ACAD-RUN] silentConfigPath={silentConfigPath}");
+        }
+
+        private void CleanupFixedConfigPath()
+        {
+            TryDeleteTempFile(Path.Combine(Path.GetTempPath(), "Licorp_MergeSheets_Config.json"));
         }
 
         private string CreateConsoleSeedFile(string sourcePath)

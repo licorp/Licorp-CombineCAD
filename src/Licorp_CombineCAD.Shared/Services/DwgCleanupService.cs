@@ -29,7 +29,7 @@ namespace Licorp_CombineCAD.Services
                     {
                         var name = Path.GetFileNameWithoutExtension(f);
                         return !name.Equals(baseName, StringComparison.OrdinalIgnoreCase)
-                               && name.StartsWith(baseName, StringComparison.OrdinalIgnoreCase);
+                               && IsXRefMatch(name, baseName);
                     })
                     .ToList();
 
@@ -60,7 +60,8 @@ namespace Licorp_CombineCAD.Services
                     .Where(f =>
                     {
                         var name = Path.GetFileNameWithoutExtension(f);
-                        return name.StartsWith(mainFileName, StringComparison.OrdinalIgnoreCase);
+                        return name.Equals(mainFileName, StringComparison.OrdinalIgnoreCase)
+                            || IsXRefMatch(name, mainFileName);
                     })
                     .OrderBy(f => new FileInfo(f).Length)
                     .ToList();
@@ -96,6 +97,14 @@ namespace Licorp_CombineCAD.Services
         /// <summary>
         /// Cleanup a temporary export folder
         /// </summary>
+
+        private static bool IsXRefMatch(string fileName, string baseName)
+        {
+            // Revit XREF naming: {SheetName}-{ViewName}.dwg or {SheetName}_{ViewName}.dwg
+            // Must match with delimiter to avoid false positives like A1010 matching A101
+            return fileName.StartsWith(baseName + "_", StringComparison.OrdinalIgnoreCase)
+                || fileName.StartsWith(baseName + "-", StringComparison.OrdinalIgnoreCase);
+        }
         public static void CleanupTempFolder(string tempPath)
         {
             if (string.IsNullOrEmpty(tempPath) || !Directory.Exists(tempPath))
@@ -133,7 +142,7 @@ namespace Licorp_CombineCAD.Services
                     {
                         var name = Path.GetFileNameWithoutExtension(f);
                         return !name.Equals(mainFileName, StringComparison.OrdinalIgnoreCase)
-                               && name.StartsWith(mainFileName, StringComparison.OrdinalIgnoreCase);
+                               && IsXRefMatch(name, mainFileName);
                     })
                     .ToArray();
             }
