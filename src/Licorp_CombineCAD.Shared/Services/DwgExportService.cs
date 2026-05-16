@@ -196,6 +196,8 @@ namespace Licorp_CombineCAD.Services
                 EnsureOutputFolder(settings.OutputFolder);
                 PrepareOutputFolderForExport(settings.OutputFolder);
 
+                _unloadedLinkIds = UnloadLinkedModels();
+
                 for (int i = 0; i < sheets.Count; i++)
                 {
                     if (cancellationToken.IsCancellationRequested)
