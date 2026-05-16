@@ -3696,19 +3696,31 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                             ? Vector3d.ZAxis
                             : sourceViewport.ViewDirection;
 
-                        // Offset the camera target in WCS with moved ModelSpace geometry.
-                        // Keep source ViewCenter so paper viewport framing and CustomScale stay identical.
+                        // Set all viewport properties before computing ViewCenter offset,
+                        // because GetViewCenterOffset depends on ViewTarget, ViewDirection, and TwistAngle.
                         vp.ViewTarget = new Point3d(
                             sourceViewport.ViewTarget.X + modelOffset.X,
                             sourceViewport.ViewTarget.Y + modelOffset.Y,
                             sourceViewport.ViewTarget.Z + modelOffset.Z);
-                        vp.ViewCenter = sourceViewport.ViewCenter;
                         vp.ViewHeight = sourceViewport.ViewHeight;
+                        vp.TwistAngle = sourceViewport.TwistAngle;
 
                         if (sourceViewport.CustomScale > 0.0)
                             vp.CustomScale = sourceViewport.CustomScale;
 
-                        vp.TwistAngle = sourceViewport.TwistAngle;
+                        // Offset ViewCenter (DCS) to match the displaced ViewTarget (WCS).
+                        // Without this, the viewport shows the wrong region of ModelSpace.
+                        if (Math.Abs(modelOffset.X) > 1e-6 || Math.Abs(modelOffset.Y) > 1e-6)
+                        {
+                            var vcOffset = GetViewCenterOffset(vp, modelOffset);
+                            vp.ViewCenter = new Point2d(
+                                sourceViewport.ViewCenter.X + vcOffset.X,
+                                sourceViewport.ViewCenter.Y + vcOffset.Y);
+                        }
+                        else
+                        {
+                            vp.ViewCenter = sourceViewport.ViewCenter;
+                        }
                         vp.PerspectiveOn = false;
                         vp.FrontClipOn = false;
                         vp.BackClipOn = false;
@@ -3753,6 +3765,44 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         AcadLogger.LogWarning($"RECREATE viewport error: {layoutName}: {ex.Message}");
                     }
                 }
+
+                // Erase any utility/default viewport that AutoCAD auto-created when we
+                // activated the layout (LayoutManager.Current.CurrentLayout = layoutName).
+                // These are 12x9 viewports at (6,4.5) that appear after our viewports.
+                {
+                    var utilityIds = new List<ObjectId>();
+                    foreach (ObjectId id in paperSpace)
+                    {
+                        try
+                        {
+                            var vp = trans.GetObject(id, OpenMode.ForWrite, false) as Viewport;
+                            if (vp == null || vp.IsErased)
+                                continue;
+                            if (IsUtilityViewport(vp, 0.0))
+                            {
+                                utilityIds.Add(id);
+                                AcadLogger.LogInfo(
+                                    $"RECREATE: erasing auto-created utility viewport '{layoutName}' " +
+                                    $"handle={vp.Handle} paperSize=({vp.Width:F2},{vp.Height:F2})");
+                            }
+                        }
+                        catch { }
+                    }
+                    foreach (var id in utilityIds)
+                    {
+                        try
+                        {
+                            var vp = trans.GetObject(id, OpenMode.ForWrite, false) as Viewport;
+                            if (vp != null && !vp.IsErased)
+                                vp.Erase();
+                        }
+                        catch (System.Exception ex)
+                        {
+                            AcadLogger.LogWarning($"RECREATE: failed to erase utility VP: {ex.Message}");
+                        }
+                    }
+                }
+
                 try
                 {
                     db.UpdateExt(true);
