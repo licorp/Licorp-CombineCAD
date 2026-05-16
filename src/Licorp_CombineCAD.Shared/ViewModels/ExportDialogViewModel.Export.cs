@@ -193,33 +193,6 @@ namespace Licorp_CombineCAD.ViewModels
 
                         var outputPath = GetUniqueOutputPath();
 
-                        // Show merge preview dialog
-                        var previewConfirmed = await Application.Current.Dispatcher.InvokeAsync(() =>
-                        {
-                            var previewMsg = $"Merge Preview ({ExportMode} mode):\n\n" +
-                                $"Source files: {exportedFiles.Count}\n" +
-                                $"Output: {outputPath}\n\n" +
-                                "Sheets to merge:\n";
-
-                            for (int i = 0; i < Math.Min(layoutNames.Count, exportedFiles.Count); i++)
-                                previewMsg += $"  {i + 1}. {layoutNames[i]}\n";
-
-                            if (layoutNames.Count > 10)
-                                previewMsg += $"  ... and {layoutNames.Count - 10} more\n";
-
-                            previewMsg += "\nProceed with merge?";
-
-                            return MessageBox.Show(previewMsg, "Merge Preview",
-                                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-                        });
-
-                        if (!previewConfirmed)
-                        {
-                            StatusMessage = "Merge cancelled by user.";
-                            IsExporting = false;
-                            return;
-                        }
-
                         var mergeSuccess = false;
 
                         switch (ExportMode)
@@ -252,17 +225,6 @@ namespace Licorp_CombineCAD.ViewModels
                                         "Merge Warning",
                                         MessageBoxButton.OK,
                                         MessageBoxImage.Warning);
-                                }));
-                            }
-                            else
-                            {
-                                await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-                                {
-                                    MessageBox.Show(
-                                        "Merge thành công.\n\nDWG: " + finalOutputPath,
-                                        "Merge Completed",
-                                        MessageBoxButton.OK,
-                                        MessageBoxImage.Information);
                                 }));
                             }
 

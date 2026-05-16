@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -80,7 +81,72 @@ namespace Licorp_MergeSheets
                 AcadLogger.LogInfo($"CombinedDwgIndexEnabled: {config.SheetSetEnabled}");
                 AcadLogger.LogInfo($"RasterImageMode: {config.RasterImageMode}");
                 AcadLogger.LogInfo($"MergeLayers: {config.MergeLayers}");
+                AcadLogger.LogInfo($"LayoutNamingRule: {config.LayoutNamingRule}");
+                if (!string.IsNullOrWhiteSpace(config.LayoutNamingPattern))
+                    AcadLogger.LogInfo($"LayoutNamingPattern: {config.LayoutNamingPattern}");
+                if (!string.IsNullOrWhiteSpace(config.LayoutNamingPrefix))
+                    AcadLogger.LogInfo($"LayoutNamingPrefix: {config.LayoutNamingPrefix}");
                 AcadLogger.LogInfo($"ViewportMode: {config.ViewportMode}");
+
+                if (!string.IsNullOrWhiteSpace(config.SourceFolder))
+                    AcadLogger.LogInfo($"SourceFolder: {config.SourceFolder}");
+                if (!string.IsNullOrWhiteSpace(config.SourcePattern))
+                    AcadLogger.LogInfo($"SourcePattern: {config.SourcePattern}");
+                if (config.BackupBeforeOverwrite)
+                    AcadLogger.LogInfo("BackupBeforeOverwrite: enabled");
+                if (config.TitleBlockAutoFill)
+                    AcadLogger.LogInfo($"TitleBlockAutoFill: enabled (CSV={config.TitleBlockCsvPath})");
+                if (config.ApplyLayerMapping)
+                    AcadLogger.LogInfo($"ApplyLayerMapping: enabled ({config.LayerMappingRules?.Count ?? 0} rules)");
+                if (!string.IsNullOrWhiteSpace(config.LayoutNamingPreset))
+                    AcadLogger.LogInfo($"LayoutNamingPreset: {config.LayoutNamingPreset}");
+                if (config.AutoPdfExport)
+                    AcadLogger.LogInfo($"AutoPdfExport: enabled (folder={config.PdfOutputFolder})");
+
+                if (!string.IsNullOrWhiteSpace(config.LayoutNamingPreset))
+                {
+                    string presetPattern = LayoutNamingPresets.GetPattern(config.LayoutNamingPreset);
+                    if (presetPattern != null)
+                    {
+                        config.LayoutNamingRule = "Custom";
+                        config.LayoutNamingPattern = presetPattern;
+                        AcadLogger.LogInfo($"Applied preset '{config.LayoutNamingPreset}' -> pattern '{presetPattern}'");
+                    }
+                    else
+                    {
+                        AcadLogger.LogWarning($"Unknown layout naming preset: {config.LayoutNamingPreset}");
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(config.SourceFolder) &&
+                    (config.SourceFiles == null || config.SourceFiles.Count == 0))
+                {
+                    AcadLogger.LogSection("Batch Folder Scan");
+                    var folderService = new BatchFolderService();
+                    config.SourceFiles = folderService.ScanFolder(
+                        config.SourceFolder,
+                        config.SourcePattern ?? "*.dwg",
+                        config.RecursiveScan);
+                    AcadLogger.LogInfo($"Batch scan found {config.SourceFiles.Count} file(s)");
+                }
+
+                if (config.PreflightCheck)
+                {
+                    AcadLogger.LogSection("Preflight Check");
+                    var preflightService = new PreflightService();
+                    var preflightResult = preflightService.RunPreflight(config);
+
+                    foreach (var warning in preflightResult.Warnings)
+                        AcadLogger.LogWarning($"Preflight: {warning}");
+
+                    if (!preflightResult.Success)
+                    {
+                        foreach (var error in preflightResult.Errors)
+                            AcadLogger.LogError($"Preflight: {error}");
+                        statusMessage = "Preflight check failed: " + string.Join("; ", preflightResult.Errors);
+                        return;
+                    }
+                }
 
                 if (config.SourceFiles != null)
                 {
@@ -89,6 +155,15 @@ namespace Licorp_MergeSheets
                         var sf = config.SourceFiles[i];
                         AcadLogger.LogDebug($" [{i}] {sf.Path} -> Layout: {sf.Layout}");
                     }
+                }
+
+                if (config.BackupBeforeOverwrite && File.Exists(config.OutputPath))
+                {
+                    AcadLogger.LogSection("Backup");
+                    var backupService = new BackupService();
+                    string backupPath = backupService.CreateBackup(config.OutputPath);
+                    if (backupPath != null)
+                        AcadLogger.LogInfo($"Backup created: {backupPath}");
                 }
 
                 AcadLogger.LogSection("Starting Merge Operation");
@@ -130,6 +205,26 @@ namespace Licorp_MergeSheets
                 {
                     merger.HandleRasterImages(config);
                     merger.CreateCombinedDwgIndex(config);
+
+                    if (config.TitleBlockAutoFill && !string.IsNullOrWhiteSpace(config.TitleBlockCsvPath))
+                    {
+                        AcadLogger.LogSection("Title Block Auto-Fill");
+                        var titleBlockService = new TitleBlockFillService();
+                        var mappings = titleBlockService.LoadMappingsFromCsv(config.TitleBlockCsvPath, config.TitleBlockAttributeName);
+                        if (mappings.Count > 0)
+                        {
+                            int filled = titleBlockService.FillTitleBlocks(config.OutputPath, mappings);
+                            AcadLogger.LogInfo($"Title block auto-fill: {filled} attribute(s) filled");
+                        }
+                    }
+
+                    if (config.AutoPdfExport)
+                    {
+                        AcadLogger.LogSection("Auto PDF Export");
+                        var pdfService = new PdfExportService();
+                        string pdfFolder = config.PdfOutputFolder ?? Path.GetDirectoryName(config.OutputPath);
+                        pdfService.SchedulePdfExport(config.OutputPath, pdfFolder, config.PdfPresetName);
+                    }
                 }
 
                 if (success)

@@ -43,6 +43,8 @@
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.*" />
     <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Security" />
   </ItemGroup>
 
   <Import Project="..\Licorp_CombineCAD.Shared\Licorp_CombineCAD.Shared.projitems" Label="Shared" />
