@@ -1,0 +1,150 @@
+version=1
+
+# This file caches language service data to improve the performance of C# Dev Kit.
+# It is not intended for manual editing. It can safely be deleted and will be
+# regenerated automatically. For more information, see https://aka.ms/lscache
+#
+# To control where cache files are stored, use the following VS Code setting:
+#   "dotnet.projectsystem.cacheInProjectFolder": true
+
+[project]
+language=C#
+primary
+lastDtbSucceeded
+
+[properties]
+AssemblyName=Licorp_CombineCAD
+CommandLineArgsForDesignTimeEvaluation=-langversion:latest -define:DEBUG;TRACE;REVIT2023
+CompilerGeneratedFilesOutputPath=
+MaxSupportedLangVersion=7.3
+ProjectAssetsFile=<PATH>obj/project.assets.json
+RootNamespace=Licorp_CombineCAD
+RunAnalyzers=
+RunAnalyzersDuringLiveAnalysis=
+SolutionPath=<PATH>../../Licorp_CombineCAD.sln
+TargetFrameworkIdentifier=.NETFramework
+TargetPath=<PATH>../../bin/R2023/Debug/Licorp_CombineCAD.dll
+TargetRefPath=
+TemporaryDependencyNodeTargetIdentifier=net48
+
+[commandLineArguments]
+/noconfig
+/unsafe-
+/checked-
+/nowarn:1701,1702,CS0618,CS0612,NU1701,NU1702,MSB3277,1701,1702
+/fullpaths
+/nostdlib+
+/platform:x64
+/errorreport:prompt
+/warn:4
+/define:DEBUG;TRACE;REVIT2023;DEBUG;NETFRAMEWORK;NET48;NET30_OR_GREATER;NET35_OR_GREATER;NET40_OR_GREATER;NET45_OR_GREATER;NET451_OR_GREATER;NET452_OR_GREATER;NET46_OR_GREATER;NET461_OR_GREATER;NET462_OR_GREATER;NET47_OR_GREATER;NET471_OR_GREATER;NET472_OR_GREATER;NET48_OR_GREATER
+/highentropyva+
+/nullable:disable
+/debug+
+/debug:full
+/filealign:512
+/optimize-
+/out:obj\Debug\Licorp_CombineCAD.dll
+/subsystemversion:6.00
+/target:library
+/warnaserror-
+/utf8output
+/deterministic+
+/langversion:latest
+/warnaserror+:NU1605
+
+[sourceFiles]
+../Licorp_CombineCAD.Shared/
+ App.cs
+ Commands/ExportCommands.cs
+ Helpers/ReflectionHelper.cs
+ Models/
+  ExportMode.cs
+  ExportResult.cs
+  ExportSettings.cs
+  LayerMapping.cs
+  PreflightModels.cs
+  SheetInfo.cs
+  SheetScheduleInfo.cs
+  SortMode.cs
+  VerticalAlignment.cs
+  ViewSheetSetInfo.cs
+ Properties/AssemblyInfo.cs
+ Services/
+  AutoCadLocatorService.cs
+  DwgCleanupService.cs
+  DwgExportService.cs
+  DwgMergeService.cs
+  LayerMappingService.cs
+  LicenseAuthService.cs
+  LicorpTrace.cs
+  Logger.cs
+  ProfileService.cs
+  RevitThreadService.cs
+  SheetCollectorService.cs
+  SheetPreflightService.cs
+  SheetScheduleService.cs
+  SmartScaleService.cs
+  ViewSheetSetService.cs
+ ViewModels/
+  ExportDialogViewModel.cs
+  ExportDialogViewModel.Derived.cs
+  ExportDialogViewModel.Export.cs
+  ExportDialogViewModel.Profiles.cs
+  ExportDialogViewModel.Sheets.cs
+  LayerManagerViewModel.cs
+  ProgressViewModel.cs
+  SheetItemViewModel.cs
+ Views/
+  Converters.cs
+  CustomFileNameDialog.xaml.cs
+  ExportDialog.xaml.cs
+  LayerManagerDialog.xaml.cs
+  ProfileNameDialog.xaml.cs
+  ProgressDialog.xaml.cs
+  ReorderSheetsDialog.xaml.cs
+  SaveSheetSetDialog.xaml.cs
+obj/Debug/
+ .NETFramework,Version=v4.8.AssemblyAttributes.cs
+ CustomFileNameDialog.g.cs
+ ExportDialog.g.cs
+ GeneratedInternalTypeHelper.g.cs
+ LayerManagerDialog.g.cs
+ ProfileNameDialog.g.cs
+ ProgressDialog.g.cs
+ ReorderSheetsDialog.g.cs
+ SaveSheetSetDialog.g.cs
+
+[metadataReferences]
+<NETFXREF>/v4.8/
+ Microsoft.CSharp.dll
+ mscorlib.dll
+ PresentationCore.dll
+ PresentationFramework.dll
+ System.Core.dll
+ System.Data.dll
+ System.dll
+ System.Drawing.dll
+ System.IO.Compression.FileSystem.dll
+ System.Net.Http.dll
+ System.Numerics.dll
+ System.Runtime.Serialization.dll
+ System.Security.dll
+ System.Windows.Controls.Ribbon.dll
+ System.Windows.Forms.dll
+ System.Xaml.dll
+ System.Xml.dll
+ System.Xml.Linq.dll
+ UIAutomationClient.dll
+ UIAutomationClientsideProviders.dll
+ UIAutomationProvider.dll
+ UIAutomationTypes.dll
+ WindowsBase.dll
+ WindowsFormsIntegration.dll
+<NUGET>/
+ newtonsoft.json/13.0.4/lib/net45/Newtonsoft.Json.dll
+ nice3point.revit.api.revitapi/2023.1.90/ref/net48/RevitAPI.dll
+ nice3point.revit.api.revitapiui/2023.1.90/ref/net48/RevitAPIUI.dll
+
+[analyzerConfigFiles]
+obj/Debug/Licorp_CombineCAD.R2023.GeneratedMSBuildEditorConfig.editorconfig
