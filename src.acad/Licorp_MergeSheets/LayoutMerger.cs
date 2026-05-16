@@ -3708,19 +3708,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         if (sourceViewport.CustomScale > 0.0)
                             vp.CustomScale = sourceViewport.CustomScale;
 
-                        // Offset ViewCenter (DCS) to match the displaced ViewTarget (WCS).
-                        // Without this, the viewport shows the wrong region of ModelSpace.
-                        if (Math.Abs(modelOffset.X) > 1e-6 || Math.Abs(modelOffset.Y) > 1e-6)
-                        {
-                            var vcOffset = GetViewCenterOffset(vp, modelOffset);
-                            vp.ViewCenter = new Point2d(
-                                sourceViewport.ViewCenter.X + vcOffset.X,
-                                sourceViewport.ViewCenter.Y + vcOffset.Y);
-                        }
-                        else
-                        {
-                            vp.ViewCenter = sourceViewport.ViewCenter;
-                        }
+                        vp.ViewCenter = sourceViewport.ViewCenter;
                         vp.PerspectiveOn = false;
                         vp.FrontClipOn = false;
                         vp.BackClipOn = false;
