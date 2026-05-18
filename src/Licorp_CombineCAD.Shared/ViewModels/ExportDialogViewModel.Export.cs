@@ -130,6 +130,7 @@ namespace Licorp_CombineCAD.ViewModels
                 var options = _exportService.BuildExportOptions(settings);
                 var cts = _cancellationTokenSource;
                 var progressVm = _progressVm;
+                var totalSheets = selectedSheets.Count;
 
                 ExportResult exportResult = await _revitThreadService.RunOnRevitThreadAsync(app =>
                 {
@@ -137,7 +138,7 @@ namespace Licorp_CombineCAD.ViewModels
                     {
                         Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                         {
-                            progressVm.Update(info.Phase, info.CurrentItem, info.Current, info.Total);
+                            progressVm.Update(info.Phase, info.CurrentItem, info.Current, totalSheets * 2);
                         }));
                     });
 
@@ -195,16 +196,24 @@ namespace Licorp_CombineCAD.ViewModels
 
                         var mergeSuccess = false;
 
+                        var mergeProgress = new DirectProgress<MergeProgressInfo>(info =>
+                        {
+                            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                progressVm.Update(info.Phase, info.CurrentItem, totalSheets + info.Current, totalSheets * 2);
+                            }));
+                        });
+
                         switch (ExportMode)
                         {
                             case ExportMode.MultiLayout:
-                                mergeSuccess = await mergeService.MergeToMultiLayoutAsync(exportedFiles, outputPath, layoutNames, null, cts.Token);
+                                mergeSuccess = await mergeService.MergeToMultiLayoutAsync(exportedFiles, outputPath, layoutNames, mergeProgress, cts.Token);
                                 break;
                             case ExportMode.SingleLayout:
-                                mergeSuccess = await mergeService.MergeToSingleLayoutAsync(exportedFiles, outputPath, "Combined", null, cts.Token);
+                                mergeSuccess = await mergeService.MergeToSingleLayoutAsync(exportedFiles, outputPath, "Combined", mergeProgress, cts.Token);
                                 break;
                             case ExportMode.ModelSpace:
-                                mergeSuccess = await mergeService.MergeToModelSpaceAsync(exportedFiles, outputPath, layoutNames, null, cts.Token);
+                                mergeSuccess = await mergeService.MergeToModelSpaceAsync(exportedFiles, outputPath, layoutNames, mergeProgress, cts.Token);
                                 break;
                         }
 

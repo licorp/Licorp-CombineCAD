@@ -237,8 +237,14 @@ namespace Licorp_MergeSheets
                                     $"{baseErasedViewportCount} viewport(s) for '{firstLayoutName}'");
                             }
 
-                            EnsureLayoutPaperContextFromGeometry(
+                            var paperCtx = EnsureLayoutPaperContextFromGeometry(
                                 outputDb, trans, firstLayout, firstBtr, firstLayoutName, "BASE");
+
+                            if (keepViewportLive)
+                            {
+                                TransformExistingViewportsForPaperRotation(
+                                    trans, firstBtr, paperCtx, firstLayoutName);
+                            }
 
                             var ps = new PlotSettings(firstLayout.ModelType);
                             ps.CopyFrom(firstLayout);
@@ -1611,7 +1617,7 @@ var clonedIds = allClonedIds[idx];
             return bounds;
         }
 
-        private void EnsureLayoutPaperContextFromGeometry(
+        private PaperContextResult EnsureLayoutPaperContextFromGeometry(
             Database db,
             Transaction tr,
             Layout layout,
@@ -1619,10 +1625,18 @@ var clonedIds = allClonedIds[idx];
             string layoutName,
             string phase)
         {
+            var result = new PaperContextResult
+            {
+                AppliedRotation = PlotRotation.Degrees000,
+                RequiredWidth = 0.0,
+                RequiredHeight = 0.0,
+                WasAdjusted = false
+            };
+
             try
             {
                 if (layout == null || paperSpace == null)
-                    return;
+                    return result;
 
                 int extentEntities;
                 string paperCacheKey = GetExtentsCacheKey(null, layoutName + "_paper");
@@ -1639,6 +1653,8 @@ var clonedIds = allClonedIds[idx];
                     if (Math.Abs(shiftX) > 1e-6 || Math.Abs(shiftY) > 1e-6)
                     {
                         var moved = TranslatePaperEntitiesToOrigin(paperSpace, tr, shiftX, shiftY);
+                        result.ShiftX = shiftX;
+                        result.ShiftY = shiftY;
                         AcadLogger.LogInfo(
                             $"{phase}: normalized paper entities to origin for '{layoutName}', " +
                             $"move=({shiftX:F4},{shiftY:F4}), moved={moved}");
@@ -1677,12 +1693,17 @@ var clonedIds = allClonedIds[idx];
                     Math.Abs(currentWidth - width) > tol ||
                     Math.Abs(currentHeight - height) > tol;
 
+                result.RequiredWidth = width;
+                result.RequiredHeight = height;
+
                 if (!invalidPlotSize && !mismatch)
                 {
                     AcadLogger.LogInfo(
                         $"{phase}: paper context exact for {layoutName} " +
                         $"paper={currentWidth:F2},{currentHeight:F2}, title={width:F2},{height:F2}");
-                    return;
+                    try { result.AppliedRotation = layout.PlotRotation; } catch { }
+                    result.WasAdjusted = result.AppliedRotation != PlotRotation.Degrees000;
+                    return result;
                 }
 
                 AcadLogger.LogInfo(
@@ -1708,8 +1729,12 @@ var clonedIds = allClonedIds[idx];
                     try { psv.SetPlotCentered(layout, false); } catch { }
                     try { psv.SetPlotOrigin(layout, new Point2d(0.0, 0.0)); } catch { }
 
+                    try { result.AppliedRotation = layout.PlotRotation; } catch { }
+                    result.WasAdjusted = true;
+
                     AcadLogger.LogInfo(
-                        $"{phase}: geometry paper context applied for '{layoutName}', required=({width:F2}, {height:F2})");
+                        $"{phase}: geometry paper context applied for '{layoutName}', " +
+                        $"required=({width:F2}, {height:F2}), rotation={result.AppliedRotation}");
                 }
                 catch (System.Exception psvEx)
                 {
@@ -1722,6 +1747,8 @@ var clonedIds = allClonedIds[idx];
                 AcadLogger.LogWarning(
                     $"{phase}: EnsureLayoutPaperContextFromGeometry failed for '{layoutName}': {ex.Message}");
             }
+
+            return result;
         }
 
         private int TranslatePaperEntitiesToOrigin(BlockTableRecord paperSpace, Transaction tr, double dx, double dy)
@@ -1798,9 +1825,6 @@ var clonedIds = allClonedIds[idx];
                             $"media='{selectedMedia}', paper=({layout.PlotPaperSize.X:F2},{layout.PlotPaperSize.Y:F2}), " +
                             $"origin=({-minX:F2},{-minY:F2}), extentEntities={extentEntities}");
 
-                        // Keep fallback bounds aligned with detected title-sheet geometry.
-                        // Do not merge with PlotPaperSize, otherwise mixed orientation can
-                        // inflate bounds into a square (e.g. 1066.8 x 1066.8).
                         return new Extents3d(
                             new Point3d(0.0, 0.0, 0.0),
                             new Point3d(width, height, 0.0));
@@ -3119,17 +3143,17 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
         {
             try
             {
-                // Lấy LayoutDictionary và BlockTable
+                // L??y LayoutDictionary vA? BlockTable
                 var layoutDict = (DBDictionary)outputTrans.GetObject(outputDb.LayoutDictionaryId, OpenMode.ForWrite);
                 
-                // Kiểm tra layout đã tồn tại chưa
+                // Ki?_?m tra layout ?`A? t?_"n t?-i ch?oa
                 if (layoutDict.Contains(layoutName))
                 {
                     AcadLogger.LogWarning($"Layout '{layoutName}' already exists");
                     return ObjectId.Null;
                 }
                 
-                // Tạo BTR mới với tên unique (không copy từ template)
+                // T?-o BTR m?_>i v?_>i tAYn unique (khA'ng copy t?_r template)
                 foreach (DBDictionaryEntry entry in layoutDict)
                 {
                     var candidate = outputTrans.GetObject(entry.Value, OpenMode.ForWrite, false) as Layout;
@@ -3487,8 +3511,8 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         if (entry.Key == "Model")
                             continue;
 
-                        // Chỉ xóa layout có tên mặc định (Layout1, Layout2...) và BTR rỗng
-                        // Không xóa layout do user đặt tên
+                        // Ch?_% xA3a layout cA3 tAYn m??c ?`?_<nh (Layout1, Layout2...) vA? BTR r?_-ng
+                        // KhA'ng xA3a layout do user ?`??t tAYn
                         bool isDefaultName = entry.Key.StartsWith("Layout", StringComparison.OrdinalIgnoreCase) 
                             && int.TryParse(entry.Key.Substring(6), out _);
                         
@@ -3625,6 +3649,54 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             return viewports;
         }
 
+        private void TransformExistingViewportsForPaperRotation(
+            Transaction trans,
+            BlockTableRecord paperSpace,
+            PaperContextResult paperCtx,
+            string layoutName)
+        {
+            if (paperCtx == null)
+                return;
+
+            double shiftX = paperCtx.ShiftX;
+            double shiftY = paperCtx.ShiftY;
+
+            // Only apply paper normalization shift (no rotation).
+            // Paper rotation is disabled to keep title block in correct position.
+            // Viewport TwistAngle stays unchanged - content displays upright.
+            if (Math.Abs(shiftX) < 1e-6 && Math.Abs(shiftY) < 1e-6)
+                return;
+
+            int transformed = 0;
+            foreach (ObjectId id in paperSpace)
+            {
+                try
+                {
+                    var vp = trans.GetObject(id, OpenMode.ForWrite, false) as Viewport;
+                    if (vp == null || !IsModelViewportCandidate(vp))
+                        continue;
+
+                    double srcCx = vp.CenterPoint.X;
+                    double srcCy = vp.CenterPoint.Y;
+
+                    vp.CenterPoint = new Point3d(
+                        srcCx + shiftX,
+                        srcCy + shiftY,
+                        vp.CenterPoint.Z);
+
+                    transformed++;
+                    AcadLogger.LogInfo(
+                        $"TRANSFORM VP: {layoutName} handle={vp.Handle} " +
+                        $"paperShift=({shiftX:F4},{shiftY:F4}) " +
+                        $"srcCenter=({srcCx:F2},{srcCy:F2}) => newCenter={FormatPoint(vp.CenterPoint)}");
+                }
+                catch { }
+            }
+
+            if (transformed > 0)
+                AcadLogger.LogInfo($"TRANSFORM VP: {layoutName} shifted={transformed} viewport(s) by ({shiftX:F4},{shiftY:F4})");
+        }
+
         private int RecreateLayoutViewports(
             Transaction trans,
             BlockTableRecord paperSpace,
@@ -3677,14 +3749,10 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                         paperSpace.AppendEntity(vp);
                         trans.AddNewlyCreatedDBObject(vp, true);
 
-                        // Match MVIEW-like behavior by putting created viewports on the dedicated viewport layer.
                         vp.LayerId = viewportLayerId;
                         vp.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                             Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
 
-                        // IMPORTANT: sourceViewport.LinetypeId belongs to source database.
-                        // Assigning cross-database ObjectId here throws eWrongDatabase and
-                        // prevents viewport creation. Keep ByLayer linetype in destination DB.
                         vp.Linetype = "ByLayer";
                         vp.LineWeight = sourceViewport.LineWeight;
 
@@ -3709,6 +3777,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
                             vp.CustomScale = sourceViewport.CustomScale;
 
                         vp.TwistAngle = sourceViewport.TwistAngle;
+
                         vp.PerspectiveOn = false;
                         vp.FrontClipOn = false;
                         vp.BackClipOn = false;
@@ -4566,6 +4635,16 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
             public string Owner;
         }
 
+    private class PaperContextResult
+        {
+            public PlotRotation AppliedRotation { get; set; }
+            public double RequiredWidth { get; set; }
+            public double RequiredHeight { get; set; }
+            public bool WasAdjusted { get; set; }
+            public double ShiftX { get; set; }
+            public double ShiftY { get; set; }
+        }
+
     private class ViewportInfo
         {
             public ObjectId SourceId { get; set; }
@@ -4588,3 +4667,7 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
         }
     }
 }
+
+
+
+

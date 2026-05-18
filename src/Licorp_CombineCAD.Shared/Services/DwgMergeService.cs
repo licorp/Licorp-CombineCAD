@@ -230,7 +230,7 @@ namespace Licorp_CombineCAD.Services
                     {
                         try
                         {
-                            await Task.Delay(1000, progressMonitorCts.Token);
+                            await Task.Delay(250, progressMonitorCts.Token);
                             if (File.Exists(progressFilePath))
                             {
                                 var json = File.ReadAllText(progressFilePath);
