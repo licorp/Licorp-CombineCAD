@@ -182,13 +182,6 @@ namespace Licorp_CombineCAD.Services
                         setLayerTableMethod.Invoke(options, new[] { layerTable });
                     }
 
-                    using (var tx = new Transaction(_document, "Import Layer Mapping"))
-                    {
-                        tx.Start();
-                        dwgSettings.SetDWGExportOptions(options);
-                        tx.Commit();
-                    }
-
                     Trace.WriteLine($"[LayerMapping] Imported {importedEntries.Count} entries");
                 }
                 else
@@ -233,7 +226,7 @@ namespace Licorp_CombineCAD.Services
                 for (int i = 1; i < lines.Length; i++)
                 {
                     var parts = lines[i].Split('\t');
-                    if (parts.Length < 5)
+                    if (parts.Length < 3)
                     {
                         errors.Add($"Line {i + 1}: Not enough columns");
                     }
