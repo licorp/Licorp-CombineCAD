@@ -238,7 +238,7 @@ namespace Licorp_MergeSheets
                             }
 
                             var paperCtx = EnsureLayoutPaperContextFromGeometry(
-                                outputDb, trans, firstLayout, firstBtr, firstLayoutName, "BASE");
+                                outputDb, trans, firstLayout, firstBtr, firstLayoutName, "BASE", firstSource.PaperSize);
 
                             if (keepViewportLive)
                             {
@@ -544,7 +544,7 @@ namespace Licorp_MergeSheets
                                 }
 
                                 EnsureLayoutPaperContextFromGeometry(
-                                    outputDb, outputTrans, destLayout, destBtr, desiredName, "GD2");
+                                    outputDb, outputTrans, destLayout, destBtr, desiredName, "GD2", source.PaperSize);
 
                                 if (srcStats.EntityCount == 0 && !LayoutHasContent(destBtr, outputTrans))
                                     AddSchedulePlaceholderContent(destBtr, outputTrans, desiredName, destLayout);
@@ -697,7 +697,9 @@ namespace Licorp_MergeSheets
         {
             try
             {
-                AcadLogger.Log("[LayoutMerger] Starting SingleLayout merge");
+                AcadLogger.LogSection("MergeToSingleLayout");
+                AcadLogger.LogInfo($"Output path: {config.OutputPath}");
+                AcadLogger.LogInfo($"Source files: {config.SourceFiles?.Count ?? 0}");
 
                 var outputDb = new Database(false, true);
 
@@ -711,22 +713,44 @@ namespace Licorp_MergeSheets
                     }
 
                     outputDb.ReadDwgFile(firstFile.Path, FileShare.ReadWrite, true, "");
+                    BindXrefsSafe(outputDb);
 
-var allSourceExtents = new List<Extents3d>();
-var allSourceIds = new List<ObjectIdCollection>();
-var allSourceDbs = new List<Database>();
-var allClonedIds = new List<List<ObjectId>>();
+                    var allSourceExtents = new List<Extents3d>();
+                    var allClonedIds = new List<List<ObjectId>>();
+                    var allSourceDbs = new List<Database>();
 
                     using (var outputTrans = outputDb.TransactionManager.StartTransaction())
                     {
-                        var modelSpaceId = SymbolUtilityServices.GetBlockModelSpaceId(outputDb);
-                        var modelSpace = (BlockTableRecord)outputTrans.GetObject(modelSpaceId, OpenMode.ForWrite);
+                        // Target Layout: Reuse "Layout1" or create "CombinedSheet"
+                        string targetLayoutName = "CombinedSheet";
+                        var layouts = (DBDictionary)outputTrans.GetObject(outputDb.LayoutDictionaryId, OpenMode.ForRead);
+                        ObjectId targetLayoutBtrId = ObjectId.Null;
 
+                        if (layouts.Contains("Layout1"))
+                        {
+                            var layout1 = (Layout)outputTrans.GetObject(layouts.GetAt("Layout1"), OpenMode.ForWrite);
+                            layout1.LayoutName = targetLayoutName;
+                            targetLayoutBtrId = layout1.BlockTableRecordId;
+                            AcadLogger.LogInfo($"Renamed 'Layout1' to '{targetLayoutName}'");
+                        }
+                        else
+                        {
+                            // Fallback: Create new layout if Layout1 doesn't exist (rare)
+                            var lm = LayoutManager.Current;
+                            lm.CreateLayout(targetLayoutName);
+                            var newLayout = (Layout)outputTrans.GetObject(layouts.GetAt(targetLayoutName), OpenMode.ForRead);
+                            targetLayoutBtrId = newLayout.BlockTableRecordId;
+                        }
+
+                        var targetBtr = (BlockTableRecord)outputTrans.GetObject(targetLayoutBtrId, OpenMode.ForWrite);
+                        AcadLogger.LogInfo($"Target Layout BTR: {targetLayoutBtrId}");
+
+                        int fileIndex = 1;
                         foreach (var source in config.SourceFiles)
                         {
                             if (!File.Exists(source.Path)) continue;
 
-                            AcadLogger.Log($"[LayoutMerger] Processing: {Path.GetFileName(source.Path)}");
+                            AcadLogger.LogInfo($"Processing: {Path.GetFileName(source.Path)} -> Layout '{targetLayoutName}'");
 
                             var sourceDb = new Database(false, true);
                             sourceDb.ReadDwgFile(source.Path, FileShare.ReadWrite, true, "");
@@ -734,37 +758,56 @@ var allClonedIds = new List<List<ObjectId>>();
 
                             using (var sourceTrans = sourceDb.TransactionManager.StartTransaction())
                             {
+                                // Phase 1 Fix: Rename blocks to avoid conflicts
+                                RenameBlocksInDb(sourceDb, sourceTrans, $"SL{fileIndex}_");
+
                                 var sourcePsr = GetSourcePaperSpace(sourceDb, sourceTrans);
+                                if (sourcePsr == null)
+                                {
+                                    AcadLogger.LogWarning($"No PaperSpace found in {Path.GetFileName(source.Path)}");
+                                    sourceDb.Dispose();
+                                    fileIndex++;
+                                    continue;
+                                }
 
                                 var ids = new ObjectIdCollection();
-                                foreach (ObjectId entId in sourcePsr) ids.Add(entId);
+                                foreach (ObjectId entId in sourcePsr)
+                                {
+                                    var ent = sourceTrans.GetObject(entId, OpenMode.ForRead) as Entity;
+                                    if (ent != null && !string.Equals(ent.Layer, PaperBackgroundLayerName, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        ids.Add(entId);
+                                    }
+                                }
 
-if (ids.Count > 0)
-{
-var idMap = new IdMapping();
-sourceDb.WblockCloneObjects(ids, modelSpaceId, idMap, DuplicateRecordCloning.Ignore, false);
+                                if (ids.Count > 0)
+                                {
+                                    var idMap = new IdMapping();
+                                    // Clone to Target Layout BTR instead of ModelSpace
+                                    sourceDb.WblockCloneObjects(ids, targetLayoutBtrId, idMap, DuplicateRecordCloning.Replace, false);
 
-var clonedIds = new List<ObjectId>();
-foreach (ObjectId id in ids)
-{
-if (idMap.Contains(id) && !idMap[id].Value.IsNull)
-clonedIds.Add(idMap[id].Value);
-}
-allClonedIds.Add(clonedIds);
+                                    var clonedIds = new List<ObjectId>();
+                                    foreach (ObjectId id in ids)
+                                    {
+                                        if (idMap.Contains(id) && !idMap[id].Value.IsNull)
+                                            clonedIds.Add(idMap[id].Value);
+                                    }
+                                    allClonedIds.Add(clonedIds);
 
-                                var singleLayoutCacheKey = GetExtentsCacheKey(source.Path, source.Layout ?? "Layout1");
-                                allSourceExtents.Add(GetExtents(sourcePsr, singleLayoutCacheKey));
-                                allSourceIds.Add(ids);
-                                allSourceDbs.Add(sourceDb);
-}
+                                    var cacheKey = GetExtentsCacheKey(source.Path, source.Layout ?? "Layout1");
+                                    allSourceExtents.Add(GetExtents(sourcePsr, cacheKey));
+                                    allSourceDbs.Add(sourceDb);
+                                }
                                 else
                                 {
                                     sourceDb.Dispose();
                                 }
                                 sourceTrans.Commit();
                             }
+                            fileIndex++;
                         }
 
+                        // Calculate offsets and transform
                         double maxGlobalHeight = 0;
                         foreach (var ext in allSourceExtents)
                         {
@@ -773,9 +816,9 @@ allClonedIds.Add(clonedIds);
                         }
 
                         double xOffset = 0;
-                        for (int idx = 0; idx < allSourceIds.Count; idx++)
+                        for (int idx = 0; idx < allClonedIds.Count; idx++)
                         {
-                            var ids = allSourceIds[idx];
+                            var clonedIds = allClonedIds[idx];
                             var ext = allSourceExtents[idx];
                             double width = ext.MaxPoint.X - ext.MinPoint.X;
                             double height = ext.MaxPoint.Y - ext.MinPoint.Y;
@@ -790,7 +833,6 @@ allClonedIds.Add(clonedIds);
                                 yOffset = maxGlobalHeight - height;
                             }
 
-var clonedIds = allClonedIds[idx];
                             var singleTransform = Matrix3d.Displacement(new Vector3d(xOffset - ext.MinPoint.X, yOffset - ext.MinPoint.Y, 0));
                             foreach (ObjectId destId in clonedIds)
                             {
@@ -804,7 +846,7 @@ var clonedIds = allClonedIds[idx];
                             }
 
                             xOffset += width + LayoutSpacing;
-                        AcadLogger.Log($"[LayoutMerger] Offset by ({xOffset}, {yOffset})");
+                            AcadLogger.LogInfo($"Transformed sheet {idx + 1}, offset=({xOffset:F2}, {yOffset:F2})");
                         }
 
                         outputTrans.Commit();
@@ -815,19 +857,21 @@ var clonedIds = allClonedIds[idx];
                         try { allSourceDbs[i].Dispose(); } catch { }
                     }
 
+                    CleanupDefaultLayouts(outputDb);
                     RegenerateLayouts(outputDb, "SingleLayout");
 
                     var dwgVersion = GetDwgVersion(config.DwgVersion);
                     outputDb.SaveAs(config.OutputPath, dwgVersion);
                     ClearExtentsCache();
-                    AcadLogger.Log($"[LayoutMerger] SingleLayout completed: {config.OutputPath}");
+                    AcadLogger.LogInfo($"SingleLayout completed: {config.OutputPath}");
                 }
 
                 return true;
             }
             catch (System.Exception ex)
             {
-                AcadLogger.Log($"[LayoutMerger] SingleLayout error: {ex.Message}");
+                AcadLogger.LogError($"SingleLayout error: {ex.Message}");
+                AcadLogger.LogError($"Stack: {ex.StackTrace}");
                 return false;
             }
         }
@@ -839,6 +883,7 @@ var clonedIds = allClonedIds[idx];
                 AcadLogger.LogSection("MergeToModelSpace");
                 AcadLogger.LogInfo($"Output path: {config.OutputPath}");
                 AcadLogger.LogInfo($"Source files: {config.SourceFiles?.Count ?? 0}");
+                AcadLogger.LogInfo($"Arrangement: {config.ModelSpaceArrangement}");
 
                 if (config.SourceFiles == null || config.SourceFiles.Count == 0)
                 {
@@ -858,7 +903,11 @@ var clonedIds = allClonedIds[idx];
                 using (outputDb)
                 {
                     double nextSheetX = 0.0;
+                    double nextSheetY = 0.0;
+                    double maxRowHeight = 0.0;
+                    int currentColumn = 0;
                     int sheetIndex = 0;
+                    double spacing = config.CustomSpacing > 0 ? config.CustomSpacing : ModelSpaceSheetMinGap;
 
                     using (var outputTrans = outputDb.TransactionManager.StartTransaction())
                     {
@@ -908,10 +957,36 @@ var clonedIds = allClonedIds[idx];
 
                                     double sheetWidth = Math.Max(1.0, sourcePaperBounds.MaxPoint.X - sourcePaperBounds.MinPoint.X);
                                     double sheetHeight = Math.Max(1.0, sourcePaperBounds.MaxPoint.Y - sourcePaperBounds.MinPoint.Y);
-                                    var placement = new Vector3d(nextSheetX - sourcePaperBounds.MinPoint.X, -sourcePaperBounds.MinPoint.Y, 0.0);
+
+                                    Vector3d placement;
+                                    switch (config.ModelSpaceArrangement)
+                                    {
+                                        case ArrangementMode.Vertical:
+                                            placement = new Vector3d(
+                                                -sourcePaperBounds.MinPoint.X,
+                                                nextSheetY - sourcePaperBounds.MinPoint.Y,
+                                                0.0);
+                                            break;
+
+                                        case ArrangementMode.Grid:
+                                            placement = new Vector3d(
+                                                nextSheetX - sourcePaperBounds.MinPoint.X,
+                                                nextSheetY - sourcePaperBounds.MinPoint.Y,
+                                                0.0);
+                                            break;
+
+                                        case ArrangementMode.Horizontal:
+                                        default:
+                                            placement = new Vector3d(
+                                                nextSheetX - sourcePaperBounds.MinPoint.X,
+                                                -sourcePaperBounds.MinPoint.Y,
+                                                0.0);
+                                            break;
+                                    }
 
                                     AcadLogger.LogInfo(
-                                        $"MODELSPACE placement: label='{label}', bounds={FormatExtents(sourcePaperBounds)}, " +
+                                        $"MODELSPACE placement: label='{label}', arrangement={config.ModelSpaceArrangement}, " +
+                                        $"bounds={FormatExtents(sourcePaperBounds)}, " +
                                         $"paperExtentEntities={paperExtentEntityCount}, placement={FormatVector(placement)}");
 
                                     var placedIds = new List<ObjectId>();
@@ -950,11 +1025,38 @@ var clonedIds = allClonedIds[idx];
 
                                     AcadLogger.LogInfo(
                                         $"MODELSPACE summary: '{label}' background={backgroundCount}, paperClones={paperCloneCount}, " +
-                                        $"bakedModelClones={bakedCount}, moved={movedCount}, finalOriginX={nextSheetX:F2}, " +
-                                        $"size=({sheetWidth:F2},{sheetHeight:F2})");
+                                        $"bakedModelClones={bakedCount}, moved={movedCount}, " +
+                                        $"position=({nextSheetX:F2},{nextSheetY:F2}), size=({sheetWidth:F2},{sheetHeight:F2})");
 
-                                    double gap = Math.Max(ModelSpaceSheetMinGap, sheetWidth * 0.02);
-                                    nextSheetX += sheetWidth + gap;
+                                    double gap = Math.Max(spacing, sheetWidth * 0.02);
+                                    double vGap = Math.Max(spacing, sheetHeight * 0.02);
+
+                                    switch (config.ModelSpaceArrangement)
+                                    {
+                                        case ArrangementMode.Vertical:
+                                            nextSheetY += sheetHeight + vGap;
+                                            break;
+
+                                        case ArrangementMode.Grid:
+                                            nextSheetX += sheetWidth + gap;
+                                            maxRowHeight = Math.Max(maxRowHeight, sheetHeight);
+                                            currentColumn++;
+
+                                            if (currentColumn >= config.GridColumns)
+                                            {
+                                                currentColumn = 0;
+                                                nextSheetX = 0;
+                                                nextSheetY += maxRowHeight + vGap;
+                                                maxRowHeight = 0;
+                                            }
+                                            break;
+
+                                        case ArrangementMode.Horizontal:
+                                        default:
+                                            nextSheetX += sheetWidth + gap;
+                                            break;
+                                    }
+
                                     sourceTrans.Commit();
                                 }
                             }
@@ -1623,7 +1725,8 @@ var clonedIds = allClonedIds[idx];
             Layout layout,
             BlockTableRecord paperSpace,
             string layoutName,
-            string phase)
+            string phase,
+            string revitPaperSize = null)
         {
             var result = new PaperContextResult
             {
@@ -1672,7 +1775,7 @@ var clonedIds = allClonedIds[idx];
                 if (hasContentBounds)
                 {
                     var normalizedBounds = NormalizeLayoutPaperToTitleSheet(
-                        db, layout, contentBounds, layoutName, phase, extentEntities);
+                        db, layout, contentBounds, layoutName, phase, extentEntities, revitPaperSize);
                     if (IsUsableExtents(normalizedBounds))
                         fallback = normalizedBounds;
 
@@ -1689,9 +1792,12 @@ var clonedIds = allClonedIds[idx];
 
                 double tol = 2.0; // mm
                 bool invalidPlotSize = currentWidth < 1.0 || currentHeight < 1.0;
-                bool mismatch =
-                    Math.Abs(currentWidth - width) > tol ||
-                    Math.Abs(currentHeight - height) > tol;
+
+                // Paper may have been rotated 90° by NormalizeLayoutPaperToTitleSheet,
+                // so check both orientations: paper (W,H) or (H,W) must cover title sheet.
+                bool fitsNormal = currentWidth >= width - tol && currentHeight >= height - tol;
+                bool fitsRotated = currentWidth >= height - tol && currentHeight >= width - tol;
+                bool mismatch = !fitsNormal && !fitsRotated;
 
                 result.RequiredWidth = width;
                 result.RequiredHeight = height;
@@ -1716,6 +1822,7 @@ var clonedIds = allClonedIds[idx];
                     EnsurePlotSettingsRefreshed(layout);
                     var psv = PlotSettingsValidator.Current;
 
+                    // PlotType.Layout + media selection
                     string selectedMedia = SelectBestCanonicalMedia(psv, layout, width, height);
                     if (!string.IsNullOrWhiteSpace(selectedMedia))
                     {
@@ -1723,6 +1830,24 @@ var clonedIds = allClonedIds[idx];
                         AcadLogger.LogInfo(
                             $"{phase}: Page setup media adjusted for '{layoutName}' => " +
                             $"media='{selectedMedia}', paper=({layout.PlotPaperSize.X:F2}, {layout.PlotPaperSize.Y:F2})");
+                    }
+
+                    // FIX #4: Validate paper size after selection and try to correct if mismatch
+                    double actualPaperW = layout.PlotPaperSize.X;
+                    double actualPaperH = layout.PlotPaperSize.Y;
+                    double sizeTolerance = 50.0;
+                    bool sizeMismatch = Math.Abs(actualPaperW - width) > sizeTolerance ||
+                                        Math.Abs(actualPaperH - height) > sizeTolerance;
+
+                    if (sizeMismatch && !string.IsNullOrWhiteSpace(selectedMedia))
+                    {
+                        AcadLogger.LogWarning(
+                            $"{phase}: PAPER SIZE MISMATCH for '{layoutName}': " +
+                            $"required=({width:F0}x{height:F0}), " +
+                            $"actual=({actualPaperW:F0}x{actualPaperH:F0}), " +
+                            $"media='{selectedMedia}'. Attempting correction...");
+
+                        TryApplyCorrectedPaperSize(psv, layout, width, height, layoutName, phase);
                     }
 
                     try { psv.SetPlotType(layout, PlotType.Layout); } catch { }
@@ -1784,7 +1909,8 @@ var clonedIds = allClonedIds[idx];
             Extents3d titleBounds,
             string layoutName,
             string phase,
-            int extentEntities)
+            int extentEntities,
+            string revitPaperSize = null)
         {
             try
             {
@@ -1803,7 +1929,19 @@ var clonedIds = allClonedIds[idx];
                     EnsurePlotSettingsRefreshed(layout);
                     var psv = PlotSettingsValidator.Current;
 
-                    string selectedMedia = SelectBestCanonicalMedia(psv, layout, width, height);
+                    // Try to use Revit paper size first for accurate matching
+                    string selectedMedia = null;
+                    if (!string.IsNullOrWhiteSpace(revitPaperSize))
+                    {
+                        selectedMedia = FindCanonicalMediaByRevitSize(psv, layout, revitPaperSize, width, height);
+                        if (!string.IsNullOrWhiteSpace(selectedMedia))
+                            AcadLogger.LogInfo($"{phase}: Using Revit paper size '{revitPaperSize}' -> media='{selectedMedia}' for '{layoutName}'");
+                    }
+
+                    // Fallback to geometry-based matching
+                    if (string.IsNullOrWhiteSpace(selectedMedia))
+                        selectedMedia = SelectBestCanonicalMedia(psv, layout, width, height);
+
                     if (!string.IsNullOrWhiteSpace(selectedMedia))
                     {
                         psv.SetCanonicalMediaName(layout, selectedMedia);
@@ -1856,14 +1994,14 @@ var clonedIds = allClonedIds[idx];
             try { originalMedia = layout.CanonicalMediaName; } catch { }
 
             string best = null;
+            bool bestIsRotated = false;
             double bestScore = double.MaxValue;
-            const double exactTol = 2.0; // mm
+            const double exactTol = 2.0;
 
             try
             {
                 var mediaNames = psv.GetCanonicalMediaNameList(layout);
 
-                // First pass: populate cache for uncached media
                 if (_mediaSizeCache.Count == 0)
                 {
                     foreach (string mediaName in mediaNames)
@@ -1884,24 +2022,70 @@ var clonedIds = allClonedIds[idx];
                     AcadLogger.LogInfo($"Media size cache populated: {_mediaSizeCache.Count} entries");
                 }
 
-                // Second pass: find best match from cache
                 foreach (var kvp in _mediaSizeCache)
                 {
                     double mw = kvp.Value.Item1;
                     double mh = kvp.Value.Item2;
 
-                    double d1 = Math.Abs(mw - requiredWidth) + Math.Abs(mh - requiredHeight);
-                    double d2 = Math.Abs(mw - requiredHeight) + Math.Abs(mh - requiredWidth);
-                    double score = Math.Min(d1, d2);
+                    double dNormal = Math.Abs(mw - requiredWidth) + Math.Abs(mh - requiredHeight);
+                    double dRotated = Math.Abs(mw - requiredHeight) + Math.Abs(mh - requiredWidth);
 
-                    if (score < bestScore)
+                    if (dNormal < dRotated)
                     {
-                        bestScore = score;
-                        best = kvp.Key;
+                        if (dNormal < bestScore)
+                        {
+                            bestScore = dNormal;
+                            best = kvp.Key;
+                            bestIsRotated = false;
+                        }
+                    }
+                    else
+                    {
+                        if (dRotated < bestScore)
+                        {
+                            bestScore = dRotated;
+                            best = kvp.Key;
+                            bestIsRotated = true;
+                        }
                     }
 
-                    if (score <= exactTol)
+                    if (bestScore <= exactTol)
                         break;
+                }
+
+                if (best != null && _mediaSizeCache.ContainsKey(best))
+                {
+                    var sz = _mediaSizeCache[best];
+                    double pw = sz.Item1;
+                    double ph = sz.Item2;
+                    if (pw < requiredWidth - 2.0 || ph < requiredHeight - 2.0)
+                    {
+                        string larger = FindLargerMedia(requiredWidth, requiredHeight);
+                        if (!string.IsNullOrWhiteSpace(larger))
+                        {
+                            AcadLogger.LogInfo(
+                                $"MEDIA: Upgraded '{best}' ({pw:F0}x{ph:F0}) to '{larger}' " +
+                                $"for required {requiredWidth:F0}x{requiredHeight:F0}");
+                            best = larger;
+                            bestIsRotated = false;
+                        }
+                    }
+                }
+
+                if (bestIsRotated && best != null)
+                {
+                    try
+                    {
+                        psv.SetCanonicalMediaName(layout, best);
+                        psv.SetPlotRotation(layout, PlotRotation.Degrees090);
+                        AcadLogger.LogInfo(
+                            $"MEDIA: Selected '{best}' with 90° rotation for {requiredWidth:F0}x{requiredHeight:F0}, " +
+                            $"paper=({layout.PlotPaperSize.X:F0}x{layout.PlotPaperSize.Y:F0})");
+                    }
+                    catch (System.Exception rotEx)
+                    {
+                        AcadLogger.LogWarning($"MEDIA: Failed to apply rotation for '{best}': {rotEx.Message}");
+                    }
                 }
             }
             finally
@@ -1913,6 +2097,273 @@ var clonedIds = allClonedIds[idx];
             }
 
             return best;
+        }
+
+        /// <summary>
+        /// Find canonical media name using Revit paper size string (e.g., "A1", "ArchE1", "A0 Landscape").
+        /// Maps Revit paper size names to AutoCAD canonical media names by matching against the media cache.
+        /// </summary>
+        private string FindCanonicalMediaByRevitSize(
+            PlotSettingsValidator psv,
+            Layout layout,
+            string revitPaperSize,
+            double fallbackWidth,
+            double fallbackHeight)
+        {
+            if (string.IsNullOrWhiteSpace(revitPaperSize))
+                return null;
+
+            string originalMedia = null;
+            try { originalMedia = layout.CanonicalMediaName; } catch { }
+
+            try
+            {
+                // Populate media cache if needed
+                if (_mediaSizeCache.Count == 0)
+                {
+                    var mediaNames = psv.GetCanonicalMediaNameList(layout);
+                    foreach (string mediaName in mediaNames)
+                    {
+                        if (string.IsNullOrWhiteSpace(mediaName) || _mediaSizeCache.ContainsKey(mediaName))
+                            continue;
+                        try
+                        {
+                            psv.SetCanonicalMediaName(layout, mediaName);
+                            double mw = layout.PlotPaperSize.X;
+                            double mh = layout.PlotPaperSize.Y;
+                            if (mw >= 1.0 && mh >= 1.0)
+                                _mediaSizeCache[mediaName] = Tuple.Create(mw, mh);
+                        }
+                        catch { }
+                    }
+                }
+
+                // Normalize Revit paper size for matching
+                string normalizedRevit = revitPaperSize.Trim().ToUpperInvariant();
+
+                // Standard paper size dimensions in mm (width, height) for landscape orientation
+                var standardSizes = new Dictionary<string, Tuple<double, double>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "A0", Tuple.Create(1189.0, 841.0) },
+                    { "A1", Tuple.Create(841.0, 594.0) },
+                    { "A2", Tuple.Create(594.0, 420.0) },
+                    { "A3", Tuple.Create(420.0, 297.0) },
+                    { "A4", Tuple.Create(297.0, 210.0) },
+                    { "ANSI A", Tuple.Create(279.4, 215.9) },
+                    { "ANSI B", Tuple.Create(431.8, 279.4) },
+                    { "ANSI C", Tuple.Create(558.8, 431.8) },
+                    { "ANSI D", Tuple.Create(863.6, 558.8) },
+                    { "ANSI E", Tuple.Create(1117.6, 863.6) },
+                    { "ARCH A", Tuple.Create(304.8, 228.6) },
+                    { "ARCH B", Tuple.Create(457.2, 304.8) },
+                    { "ARCH C", Tuple.Create(609.6, 457.2) },
+                    { "ARCH D", Tuple.Create(914.4, 609.6) },
+                    { "ARCH E", Tuple.Create(1219.2, 914.4) },
+                    { "ARCH E1", Tuple.Create(1066.8, 762.0) },
+                };
+
+                // Try to find the Revit paper size in standard sizes
+                Tuple<double, double> targetSize = null;
+                foreach (var kvp in standardSizes)
+                {
+                    if (normalizedRevit.Contains(kvp.Key.ToUpperInvariant()))
+                    {
+                        targetSize = kvp.Value;
+                        break;
+                    }
+                }
+
+                // FIX #1: Parse dimension-based strings like "42 x 30 mm" or "42x30"
+                // Revit often exports paper sizes as inches (e.g., "42 x 30 mm" actually means 42"x30" = Arch E1)
+                if (targetSize == null)
+                {
+                    var dimensionMatch = System.Text.RegularExpressions.Regex.Match(
+                        normalizedRevit, @"(\d+\.?\d*)\s*[Xx]\s*(\d+\.?\d*)");
+                    if (dimensionMatch.Success)
+                    {
+                        double dim1 = double.Parse(dimensionMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                        double dim2 = double.Parse(dimensionMatch.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
+
+                        // Heuristic: if both dimensions > 100, they're likely in inches
+                        // Common Arch sizes: 42x30, 36x24, 30x22, 24x18, 18x12
+                        bool isInches = dim1 > 100.0 && dim2 > 100.0 ||
+                            normalizedRevit.Contains("INCH") ||
+                            normalizedRevit.Contains("\"");
+
+                        if (isInches)
+                        {
+                            targetSize = Tuple.Create(dim1 * 25.4, dim2 * 25.4);
+                            AcadLogger.LogInfo($"[PaperSize] Parsed inches: {dim1}\"x{dim2}\" = {targetSize.Item1:F1}x{targetSize.Item2:F1}mm");
+                        }
+                        else
+                        {
+                            // Already in mm
+                            targetSize = Tuple.Create(dim1, dim2);
+                            AcadLogger.LogInfo($"[PaperSize] Parsed mm: {dim1}x{dim2}mm");
+                        }
+                    }
+                }
+
+                if (targetSize == null)
+                {
+                    AcadLogger.LogDebug($"[PaperSize] Revit paper size '{revitPaperSize}' not recognized as standard size");
+                    return null;
+                }
+
+                double targetW = targetSize.Item1;
+                double targetH = targetSize.Item2;
+
+                // Find the best matching media from cache
+                string bestMatch = null;
+                double bestScore = double.MaxValue;
+                const double tolerance = 5.0; // mm
+
+                foreach (var kvp in _mediaSizeCache)
+                {
+                    double mw = kvp.Value.Item1;
+                    double mh = kvp.Value.Item2;
+
+                    // Check both orientations
+                    double d1 = Math.Abs(mw - targetW) + Math.Abs(mh - targetH);
+                    double d2 = Math.Abs(mw - targetH) + Math.Abs(mh - targetW);
+                    double score = Math.Min(d1, d2);
+
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        bestMatch = kvp.Key;
+                    }
+
+                    if (score <= tolerance)
+                        break;
+                }
+
+                if (bestMatch != null && bestScore <= tolerance * 2)
+                {
+                    AcadLogger.LogInfo($"[PaperSize] Revit '{revitPaperSize}' ({targetW}x{targetH}mm) -> matched media '{bestMatch}' (score={bestScore:F1})");
+                    return bestMatch;
+                }
+
+                AcadLogger.LogDebug($"[PaperSize] No close media match for Revit '{revitPaperSize}' ({targetW}x{targetH}mm), best='{bestMatch}' score={bestScore:F1}");
+                return null;
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"[PaperSize] Error matching Revit size '{revitPaperSize}': {ex.Message}");
+                return null;
+            }
+            finally
+            {
+                if (!string.IsNullOrWhiteSpace(originalMedia))
+                {
+                    try { psv.SetCanonicalMediaName(layout, originalMedia); } catch { }
+                }
+            }
+        }
+
+        private string FindLargerMedia(double requiredWidth, double requiredHeight)
+        {
+            string bestLarger = null;
+            double bestLargerArea = double.MaxValue;
+
+            foreach (var kvp in _mediaSizeCache)
+            {
+                double mw = kvp.Value.Item1;
+                double mh = kvp.Value.Item2;
+
+                bool fitsNormal = mw >= requiredWidth - 2.0 && mh >= requiredHeight - 2.0;
+                bool fitsRotated = mw >= requiredHeight - 2.0 && mh >= requiredWidth - 2.0;
+
+                if (fitsNormal || fitsRotated)
+                {
+                    double area = mw * mh;
+                    if (area < bestLargerArea)
+                    {
+                        bestLargerArea = area;
+                        bestLarger = kvp.Key;
+                    }
+                }
+            }
+
+            return bestLarger;
+        }
+
+        private void TryApplyCorrectedPaperSize(
+            PlotSettingsValidator psv,
+            Layout layout,
+            double requiredWidth,
+            double requiredHeight,
+            string layoutName,
+            string phase)
+        {
+            try
+            {
+                var mediaNames = psv.GetCanonicalMediaNameList(layout);
+                string bestMatch = null;
+                double bestScore = double.MaxValue;
+                bool bestIsRotated = false;
+
+                foreach (string mediaName in mediaNames)
+                {
+                    if (string.IsNullOrWhiteSpace(mediaName))
+                        continue;
+
+                    try
+                    {
+                        psv.SetCanonicalMediaName(layout, mediaName);
+                        double mw = layout.PlotPaperSize.X;
+                        double mh = layout.PlotPaperSize.Y;
+
+                        if (mw < 1.0 || mh < 1.0)
+                            continue;
+
+                        double dNormal = Math.Abs(mw - requiredWidth) + Math.Abs(mh - requiredHeight);
+                        double dRotated = Math.Abs(mw - requiredHeight) + Math.Abs(mh - requiredWidth);
+
+                        if (dNormal <= dRotated && dNormal < bestScore)
+                        {
+                            bestScore = dNormal;
+                            bestMatch = mediaName;
+                            bestIsRotated = false;
+                        }
+                        else if (dRotated < dNormal && dRotated < bestScore)
+                        {
+                            bestScore = dRotated;
+                            bestMatch = mediaName;
+                            bestIsRotated = true;
+                        }
+                    }
+                    catch { }
+                }
+
+                if (bestMatch != null)
+                {
+                    psv.SetCanonicalMediaName(layout, bestMatch);
+                    if (bestIsRotated)
+                    {
+                        psv.SetPlotRotation(layout, PlotRotation.Degrees090);
+                    }
+                    else
+                    {
+                        psv.SetPlotRotation(layout, PlotRotation.Degrees000);
+                    }
+
+                    AcadLogger.LogInfo(
+                        $"{phase}: Corrected paper size for '{layoutName}' => " +
+                        $"media='{bestMatch}', paper=({layout.PlotPaperSize.X:F0}x{layout.PlotPaperSize.Y:F0}), " +
+                        $"rotated={bestIsRotated}, score={bestScore:F1}");
+                }
+                else
+                {
+                    AcadLogger.LogWarning(
+                        $"{phase}: No suitable media found for '{layoutName}' " +
+                        $"required=({requiredWidth:F0}x{requiredHeight:F0})");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                AcadLogger.LogWarning($"{phase}: Paper size correction failed for '{layoutName}': {ex.Message}");
+            }
         }
 
         private Extents3d GetPaperBackgroundExtents(Layout layout, BlockTableRecord paperSpace, Transaction tr, out int extentEntities)
@@ -2140,6 +2591,7 @@ var clonedIds = allClonedIds[idx];
             double maxX = double.MinValue, maxY = double.MinValue;
             extentsEntityCount = 0;
             var sheetCandidates = new List<Extents3d>();
+            var titleBlockBounds = new List<Extents3d>();
 
             foreach (ObjectId id in paperSpace)
             {
@@ -2155,6 +2607,9 @@ var clonedIds = allClonedIds[idx];
                     if (TryGetTitleSheetBounds(ent, out var frameBounds))
                         sheetCandidates.Add(frameBounds);
 
+                    if (TryGetTitleBlockOnlyBounds(ent, tr, out var tbBounds))
+                        titleBlockBounds.Add(tbBounds);
+
                     var ext = ent.GeometricExtents;
                     minX = Math.Min(minX, ext.MinPoint.X);
                     minY = Math.Min(minY, ext.MinPoint.Y);
@@ -2167,11 +2622,49 @@ var clonedIds = allClonedIds[idx];
                 }
             }
 
-            var result = sheetCandidates.Count > 0
-                ? SelectBestTitleSheetCandidate(sheetCandidates)
-                : (minX == double.MaxValue
+            Extents3d result;
+
+            if (titleBlockBounds.Count > 0)
+            {
+                var bestTitleBlock = SelectBestTitleSheetCandidate(titleBlockBounds);
+                AcadLogger.LogInfo(
+                    $"PAPER BOUNDS: using title block bounds from {titleBlockBounds.Count} candidates, " +
+                    $"result={FormatExtents(bestTitleBlock)}");
+                result = bestTitleBlock;
+            }
+            else if (sheetCandidates.Count > 0)
+            {
+                var titleBounds = SelectBestTitleSheetCandidate(sheetCandidates);
+
+                double expandLeft  = Math.Max(0, titleBounds.MinPoint.X - minX);
+                double expandRight = Math.Max(0, maxX - titleBounds.MaxPoint.X);
+                double expandDown  = Math.Max(0, titleBounds.MinPoint.Y - minY);
+                double expandUp    = Math.Max(0, maxY - titleBounds.MaxPoint.Y);
+
+                if (expandLeft > 1.0 || expandRight > 1.0 || expandDown > 1.0 || expandUp > 1.0)
+                {
+                    result = new Extents3d(
+                        new Point3d(titleBounds.MinPoint.X - expandLeft,
+                                    titleBounds.MinPoint.Y - expandDown, 0.0),
+                        new Point3d(titleBounds.MaxPoint.X + expandRight,
+                                    titleBounds.MaxPoint.Y + expandUp, 0.0));
+                    AcadLogger.LogInfo(
+                        $"PAPER BOUNDS: expanded title sheet to include extra content, " +
+                        $"title={FormatExtents(titleBounds)}, " +
+                        $"expand=(L={expandLeft:F1},R={expandRight:F1},D={expandDown:F1},U={expandUp:F1}), " +
+                        $"result={FormatExtents(result)}");
+                }
+                else
+                {
+                    result = titleBounds;
+                }
+            }
+            else
+            {
+                result = minX == double.MaxValue
                     ? new Extents3d(Point3d.Origin, Point3d.Origin)
-                    : new Extents3d(new Point3d(minX, minY, 0.0), new Point3d(maxX, maxY, 0.0)));
+                    : new Extents3d(new Point3d(minX, minY, 0.0), new Point3d(maxX, maxY, 0.0));
+            }
 
             if (!string.IsNullOrEmpty(cacheKey))
             {
@@ -2186,6 +2679,54 @@ var clonedIds = allClonedIds[idx];
             }
 
             return result;
+        }
+
+        private bool TryGetTitleBlockOnlyBounds(Entity ent, Transaction tr, out Extents3d bounds)
+        {
+            bounds = new Extents3d(Point3d.Origin, Point3d.Origin);
+
+            try
+            {
+                if (ent is BlockReference br)
+                {
+                    string blockName = br.Name ?? "";
+                    bool isTitleBlock = TitleBlockKeywords.Any(kw =>
+                        blockName.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                        blockName.IndexOf("TB", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        blockName.IndexOf("BORDER", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        blockName.IndexOf("KHUNG", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                    if (isTitleBlock)
+                    {
+                        bounds = br.GeometricExtents;
+                        if (IsReasonableSheetBounds(bounds))
+                            return true;
+                    }
+                }
+
+                if (ent is Polyline lw && lw.Closed && lw.NumberOfVertices >= 4)
+                {
+                    bounds = lw.GeometricExtents;
+                    double w = bounds.MaxPoint.X - bounds.MinPoint.X;
+                    double h = bounds.MaxPoint.Y - bounds.MinPoint.Y;
+
+                    bool isBorderLayer = string.Equals(ent.Layer, "DEFPOINTS", StringComparison.OrdinalIgnoreCase) ||
+                        ent.Layer.IndexOf("BORDER", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        ent.Layer.IndexOf("TITLE", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        ent.Layer.IndexOf("KHUNG", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                    if ((w >= 800.0 && w <= 1300.0 && h >= 500.0 && h <= 950.0) || isBorderLayer)
+                    {
+                        if (IsReasonableSheetBounds(bounds))
+                            return true;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private bool TryGetTitleSheetBounds(Entity ent, out Extents3d bounds)

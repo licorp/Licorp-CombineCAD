@@ -2,6 +2,9 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Licorp_CombineCAD.Services;
@@ -21,19 +24,44 @@ namespace Licorp_CombineCAD.ViewModels
         private string _elapsedTime = "00:00:00";
         private readonly Action _onCancel;
         private readonly Stopwatch _stopwatch;
-        private readonly DispatcherTimer _timer;
+        private CancellationTokenSource _timerCts;
+        private Task _timerTask;
 
         public ProgressViewModel(Action onCancel = null)
         {
             _onCancel = onCancel;
             _stopwatch = new Stopwatch();
             CancelCommand = new RelayCommand(() => ExecuteCancel(), () => !Completed);
+        }
 
-            _timer = new DispatcherTimer
+        public void StartTimer()
+        {
+            _stopwatch.Restart();
+            _timerCts = new CancellationTokenSource();
+            _timerTask = Task.Run(async () =>
             {
-                Interval = TimeSpan.FromSeconds(1)
-            };
-            _timer.Tick += (s, e) => UpdateElapsedTime();
+                while (!_timerCts.Token.IsCancellationRequested)
+                {
+                    await Task.Delay(1000, _timerCts.Token);
+                    if (_timerCts.Token.IsCancellationRequested) break;
+                    
+                    var ts = _stopwatch.Elapsed;
+                    var timeStr = $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
+                    
+                    Application.Current?.Dispatcher?.InvokeAsync(
+                        () => ElapsedTime = timeStr,
+                        DispatcherPriority.Normal);
+                }
+            }, _timerCts.Token);
+            
+            UpdateElapsedTime();
+        }
+
+        public void StopTimer()
+        {
+            _stopwatch.Stop();
+            _timerCts?.Cancel();
+            UpdateElapsedTime();
         }
 
         public string Phase
@@ -92,18 +120,10 @@ namespace Licorp_CombineCAD.ViewModels
 
         public ICommand CancelCommand { get; }
 
-        public void StartTimer()
+        private void ExecuteCancel()
         {
-            _stopwatch.Restart();
-            _timer.Start();
-            UpdateElapsedTime();
-        }
-
-        public void StopTimer()
-        {
-            _stopwatch.Stop();
-            _timer.Stop();
-            UpdateElapsedTime();
+            IsCancelled = true;
+            _onCancel?.Invoke();
         }
 
         private void UpdateElapsedTime()
@@ -112,19 +132,14 @@ namespace Licorp_CombineCAD.ViewModels
             ElapsedTime = $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
         }
 
-        private void ExecuteCancel()
-        {
-            IsCancelled = true;
-            _onCancel?.Invoke();
-        }
-
         public void Update(string phase, string currentItem, int current, int total)
         {
             Phase = phase;
             CurrentItem = currentItem;
             Current = current;
             Total = total;
-            ProgressText = $"{current}/{total}";
+            var percentage = total > 0 ? (double)current / total * 100 : 0;
+            ProgressText = $"{current}/{total} ({percentage:F0}%)";
         }
 
         public void UpdatePhase(string phase)

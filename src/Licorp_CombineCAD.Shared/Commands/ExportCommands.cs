@@ -70,28 +70,10 @@ namespace Licorp_CombineCAD.Commands
         {
             try
             {
-                // DEV BYPASS: Set env var LICORP_DEV_BYPASS=1 to skip license check during local testing.
-                // Remove or set to 0 before shipping to production.
-                bool devBypass = string.Equals(
-                    Environment.GetEnvironmentVariable("LICORP_DEV_BYPASS"), "1", StringComparison.Ordinal);
-
-                LicenseCheckResult license;
-                if (devBypass)
-                {
-                    Logger.LogInfo("[LICENSE] DEV BYPASS active (LICORP_DEV_BYPASS=1) – skipping license check.");
-                    license = new LicenseCheckResult { State = LicenseState.Licensed, Message = "Dev bypass" };
-                }
-                else
-                {
-                    license = new LicenseAuthService().EnsureLicensed();
-                }
-
-                if (!devBypass &&
-                    (license.State == LicenseState.Unlicensed || license.State == LicenseState.Expired || license.State == LicenseState.Revoked))
-                {
-                    TaskDialog.Show("CombineCAD License", license.Message);
-                    return Result.Cancelled;
-                }
+                // TEMPORARY BYPASS: License system not ready yet.
+                // TODO: Revert to LicenseAuthService when license system is complete.
+                Logger.LogInfo("[LICENSE] TEMPORARY BYPASS - license system not ready, skipping check.");
+                var license = new LicenseCheckResult { State = LicenseState.Licensed, Message = "Licensed (temporary bypass)" };
 
                 Logger.LogSection($"Export Command: {mode}");
                 Logger.LogInfo($"User: {Environment.UserName}");

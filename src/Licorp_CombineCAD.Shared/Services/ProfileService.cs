@@ -251,6 +251,10 @@ namespace Licorp_CombineCAD.Services
         public string SortMode { get; set; } = "Sheet Number";
         public string SelectedSheetScheduleId { get; set; } = "";
         public string VerticalAlign { get; set; } = "Top";
+        public string ModelSpaceArrangement { get; set; } = "Horizontal";
+        public int GridColumns { get; set; } = 3;
+        public double CustomSpacing { get; set; } = 50.0;
+        public bool ReverseSortOrder { get; set; } = false;
         public DateTime LastUsed { get; set; } = DateTime.Now;
     }
 }

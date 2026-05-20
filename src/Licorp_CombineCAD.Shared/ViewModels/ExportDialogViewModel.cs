@@ -53,10 +53,12 @@ namespace Licorp_CombineCAD.ViewModels
         private string _projectName = "Project";
         private string _projectNumber = "PRJ-001";
         private ExportMode _exportMode = ExportMode.MultiLayout;
+        private string _layoutNameTemplate = "{SheetNumber} - {SheetName}";
         private bool _smartViewScale;
         private bool _openAfterExport;
         private bool _progressAlwaysOnTop = true;
         private bool _preserveCoincidentLines;
+        private bool _mergeLayers = true;
         private int _selectedCount;
         private SheetScheduleInfo _selectedSheetSchedule;
         private CancellationTokenSource _cancellationTokenSource;
@@ -297,6 +299,59 @@ namespace Licorp_CombineCAD.ViewModels
             set { _selectedVerticalAlignment = value; OnPropertyChanged(); RefreshDerivedState(); }
         }
 
+        private string _modelSpaceArrangement = "Horizontal";
+        private int _gridColumns = 3;
+        private double _customSpacing = 50.0;
+        private bool _reverseSortOrder = false;
+
+        public string ModelSpaceArrangement
+        {
+            get => _modelSpaceArrangement;
+            set
+            {
+                _modelSpaceArrangement = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsGridArrangement));
+                RefreshDerivedState();
+            }
+        }
+
+        public bool IsGridArrangement => string.Equals(_modelSpaceArrangement, "Grid", StringComparison.OrdinalIgnoreCase);
+
+        public int GridColumns
+        {
+            get => _gridColumns;
+            set
+            {
+                _gridColumns = Math.Max(1, value);
+                OnPropertyChanged();
+                RefreshDerivedState();
+            }
+        }
+
+        public double CustomSpacing
+        {
+            get => _customSpacing;
+            set
+            {
+                _customSpacing = Math.Max(0, value);
+                OnPropertyChanged();
+                RefreshDerivedState();
+            }
+        }
+
+        public bool ReverseSortOrder
+        {
+            get => _reverseSortOrder;
+            set
+            {
+                _reverseSortOrder = value;
+                OnPropertyChanged();
+                ApplySort();
+                RefreshFilterState();
+            }
+        }
+
         public string FileNameTemplate
         {
             get => _fileNameTemplate;
@@ -309,6 +364,12 @@ namespace Licorp_CombineCAD.ViewModels
         {
             get => _preserveCoincidentLines;
             set { _preserveCoincidentLines = value; OnPropertyChanged(); }
+        }
+
+        public bool MergeLayers
+        {
+            get => _mergeLayers;
+            set { _mergeLayers = value; OnPropertyChanged(); }
         }
 
         public string SelectedSetsDisplay

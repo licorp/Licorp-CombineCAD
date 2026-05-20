@@ -43,10 +43,12 @@
 <tr>
 <td width="50%" valign="top">
 
-### 🔀 Multi-Layout Merge
+### 🔀 Multi-Layout Merge (2-Phase Engine)
 
 - Export sheets → **merge thành 1 file** DWG
 - Mỗi sheet = **1 layout tab** riêng biệt
+- **An toàn tuyệt đối**: Đổi tên block động để chống lỗi trùng lặp block từ Revit
+- **Clone 2 giai đoạn**: Xử lý ModelSpace độc lập, sau đó tái tạo PaperSpace & Viewport với độ lệch chuẩn xác
 - Giữ nguyên **viewport**, title block, annotations
 - Tự động đồng bộ **ModelSpace offsets**
 - Powered by **AcCoreConsole** (headless AutoCAD)
@@ -282,6 +284,7 @@ Licorp_CombineCAD/
 | Output folder không tồn tại | Tạo tự động |
 | Export lỗi | Log error, tiếp tục sheets còn lại |
 | Linked models | Unload → export → reload tự động |
+| Block trùng tên từ Revit | Tự động đổi tên block (prefix) trước khi gộp |
 
 ---
 

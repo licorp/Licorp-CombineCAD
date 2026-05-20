@@ -75,6 +75,15 @@ namespace Licorp_MergeSheets
                 AcadLogger.LogInfo($"Mode: {config.Mode}");
                 AcadLogger.LogInfo($"Output: {config.OutputPath}");
                 AcadLogger.LogInfo($"Source files: {config.SourceFiles?.Count ?? 0}");
+                
+                // Warning for large batch processing
+                int sheetCount = config.SourceFiles?.Count ?? 0;
+                if (sheetCount > 50)
+                {
+                    AcadLogger.LogWarning($"LARGE BATCH: Processing {sheetCount} sheets. This may take {sheetCount * 2}+ minutes.");
+                    AcadLogger.LogWarning($"Ensure sufficient disk space and do not interrupt the process.");
+                }
+                
                 AcadLogger.LogInfo($"DwgVersion: {config.DwgVersion}");
                 AcadLogger.LogInfo($"ExpectedSheetCount: {config.ExpectedSheetCount}");
                 AcadLogger.LogInfo($"VerifyAfterSave: {config.VerifyAfterSave}");
@@ -291,12 +300,47 @@ namespace Licorp_MergeSheets
                     LogPath = AcadLogger.GetLogFilePath()
                 };
 
-                File.WriteAllText(config.StatusPath, JsonConvert.SerializeObject(status, Formatting.Indented));
-                AcadLogger.LogInfo($"Status written: {config.StatusPath}");
+                var json = JsonConvert.SerializeObject(status, Formatting.Indented);
+                
+                // Atomic write: write to temp file first, then move to avoid partial writes
+                var tempPath = config.StatusPath + ".tmp";
+                File.WriteAllText(tempPath, json);
+                
+                // Move temp to final path (atomic on same volume)
+                if (File.Exists(config.StatusPath))
+                    File.Delete(config.StatusPath);
+                File.Move(tempPath, config.StatusPath);
+                
+                // Force flush to disk to ensure C# side can read it immediately
+                using (var fs = new FileStream(config.StatusPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+                {
+                    fs.Flush(true);
+                }
+                
+                AcadLogger.LogInfo($"Status written: {config.StatusPath} (success={success})");
             }
             catch (System.Exception ex)
             {
-                AcadLogger.LogWarning($"Failed to write status file: {ex.Message}");
+                AcadLogger.LogError($"CRITICAL: Failed to write status file: {ex.Message}");
+                AcadLogger.LogError($"Status path: {config?.StatusPath}");
+                
+                // Emergency fallback: write to a known location
+                try 
+                { 
+                    var emergencyPath = Path.Combine(Path.GetTempPath(), "Licorp_EmergencyStatus.json");
+                    File.WriteAllText(emergencyPath, JsonConvert.SerializeObject(new 
+                    { 
+                        Success = false, 
+                        Message = $"Status write failed: {ex.Message}",
+                        OriginalStatusPath = config?.StatusPath,
+                        Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                    }, Formatting.Indented));
+                    AcadLogger.LogInfo($"Emergency status written to: {emergencyPath}");
+                } 
+                catch (System.Exception emergencyEx)
+                {
+                    AcadLogger.LogError($"Emergency status write also failed: {emergencyEx.Message}");
+                }
             }
         }
     }

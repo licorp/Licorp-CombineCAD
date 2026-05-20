@@ -82,4 +82,26 @@ namespace Licorp_CombineCAD.Views.Converters
             return Binding.DoNothing;
         }
     }
+
+    public class StringEqualityConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value == null || parameter == null)
+                return false;
+
+            var stringValue = value.ToString();
+            var targetValue = parameter.ToString();
+            return stringValue.Equals(targetValue, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value is bool boolValue && boolValue && parameter != null)
+            {
+                return parameter.ToString();
+            }
+            return Binding.DoNothing;
+        }
+    }
 }

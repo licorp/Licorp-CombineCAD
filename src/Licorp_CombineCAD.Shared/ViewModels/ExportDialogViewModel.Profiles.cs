@@ -106,6 +106,10 @@ namespace Licorp_CombineCAD.ViewModels
             profile.SortMode = SelectedSortMode;
             profile.SelectedSheetScheduleId = SelectedSheetSchedule?.ElementIdValue ?? "";
             profile.VerticalAlign = SelectedVerticalAlignment;
+            profile.ModelSpaceArrangement = ModelSpaceArrangement;
+            profile.GridColumns = GridColumns;
+            profile.CustomSpacing = CustomSpacing;
+            profile.ReverseSortOrder = ReverseSortOrder;
             profile.LastUsed = DateTime.Now;
         }
 
@@ -136,6 +140,17 @@ namespace Licorp_CombineCAD.ViewModels
 
             if (!string.IsNullOrEmpty(profile.VerticalAlign) && AvailableVerticalAlignments.Contains(profile.VerticalAlign))
                 SelectedVerticalAlignment = profile.VerticalAlign;
+
+            if (!string.IsNullOrEmpty(profile.ModelSpaceArrangement))
+                ModelSpaceArrangement = profile.ModelSpaceArrangement;
+
+            if (profile.GridColumns > 0)
+                GridColumns = profile.GridColumns;
+
+            if (profile.CustomSpacing > 0)
+                CustomSpacing = profile.CustomSpacing;
+
+            ReverseSortOrder = profile.ReverseSortOrder;
 
             ApplySavedScheduleSelection();
             RefreshDerivedState();

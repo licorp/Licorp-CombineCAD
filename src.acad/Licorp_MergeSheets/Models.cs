@@ -3,6 +3,23 @@ using System.Collections.Generic;
 
 namespace Licorp_MergeSheets
 {
+    public enum ArrangementMode
+    {
+        Horizontal,
+        Vertical,
+        Grid
+    }
+
+    public enum SortMode
+    {
+        Manual,
+        SheetNumber,
+        SheetName,
+        Discipline,
+        PaperSize,
+        Reverse
+    }
+
     public class MergeConfig
     {
         public string Mode { get; set; }
@@ -45,6 +62,13 @@ namespace Licorp_MergeSheets
 
         public string TemplateDwgPath { get; set; }
 
+        public ArrangementMode ModelSpaceArrangement { get; set; } = ArrangementMode.Horizontal;
+        public int GridColumns { get; set; } = 3;
+        public double CustomSpacing { get; set; } = 50.0;
+
+        public SortMode SheetSortMode { get; set; } = SortMode.Manual;
+        public bool ReverseSortOrder { get; set; } = false;
+
         /// <summary>
         /// Progress callback: (currentLayoutIndex, totalLayouts, layoutName)
         /// </summary>
@@ -56,6 +80,7 @@ namespace Licorp_MergeSheets
     {
         public string Path { get; set; }
         public string Layout { get; set; }
+        public string PaperSize { get; set; }
     }
 
     public class LayerMappingRule

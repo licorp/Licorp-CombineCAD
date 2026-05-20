@@ -236,9 +236,18 @@ namespace Licorp_CombineCAD.Services
                         {
                             using (var trans = new Transaction(_document, "Apply Smart Scale"))
                             {
-                                trans.Start();
-                                smartScaleService.ApplySmartScale(viewSheet, trans);
-                                trans.Commit();
+                                try
+                                {
+                                    trans.Start();
+                                    smartScaleService.ApplySmartScale(viewSheet, trans);
+                                    trans.Commit();
+                                }
+                                catch
+                                {
+                                    if (trans.HasStarted())
+                                        trans.RollBack();
+                                    throw;
+                                }
                             }
                         }
 
@@ -319,6 +328,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
         private string ExportSingleSheet(ViewSheet viewSheet, SheetInfo sheetInfo, ExportSettings settings, DWGExportOptions options)
         {
             string fileName = GenerateFileName(sheetInfo, settings.FileNameTemplate, _document);
+            fileName = SanitizeFileNamePart(fileName);
             string fullPath = Path.Combine(settings.OutputFolder, fileName + ".dwg");
 
             DeleteExportOutputIfExists(fullPath);
@@ -368,6 +378,20 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                 Trace.WriteLine($"[DwgExport] Exception exporting {sheetInfo.SheetNumber}: {ex.Message}");
                 return null;
             }
+        }
+
+        private static string SanitizeFileNamePart(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "Unnamed";
+
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var sanitized = new string(value
+                .Select(ch => invalidChars.Contains(ch) ? '_' : ch)
+                .ToArray())
+                .Trim();
+
+            return string.IsNullOrWhiteSpace(sanitized) ? "Unnamed" : sanitized;
         }
 
         private List<ElementId> UnloadLinkedModels()

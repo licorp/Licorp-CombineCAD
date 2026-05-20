@@ -18,6 +18,7 @@
         <converters:StringToVisibleConverter x:Key="StringToVisibleConverter"/>
         <converters:EmptyToVisibleConverter x:Key="EmptyToVisibleConverter"/>
         <converters:EnumToBoolConverter x:Key="EnumToBoolConverter"/>
+        <converters:StringEqualityConverter x:Key="StringEqualityConverter"/>
 
         <Style x:Key="ModernButton" TargetType="Button">
             <Setter Property="Background" Value="#0078D4"/>
@@ -386,6 +387,35 @@
                         <Button Grid.Column="1" Content="Tokens" Command="{Binding EditFileNameTemplateCommand}" Style="{StaticResource SecondaryButton}"/>
                     </Grid>
 
+                    <!-- Advanced Export Mode (modes not on ribbon) -->
+                    <TextBlock Text="Advanced Scale Options" Style="{StaticResource SectionHeader}"/>
+                    <Border Background="#20262D"
+                            BorderBrush="#2D7DD2"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="10,8"
+                            Margin="0,0,0,4">
+                        <StackPanel>
+                            <RadioButton Content="1:1 Layout Scale (exact dimensions)"
+                                         IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=OneToOneScale}"
+                                         Foreground="White" Margin="0,2" GroupName="ExportMode"
+                                         ToolTip="Export with exact 1:1 scale, no scaling applied. Paper size = Revit sheet size."/>
+                            <RadioButton Content="Sheet Ratio Scale (fit to paper)"
+                                         IsChecked="{Binding ExportMode, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=SheetRatioScale}"
+                                         Foreground="White" Margin="0,2" GroupName="ExportMode"
+                                         ToolTip="Scale based on sheet-to-viewport ratio. Fits content into paper size."/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Layout Name Template -->
+                    <TextBlock Text="Layout Name Template" Style="{StaticResource SectionHeader}" Margin="0,8,0,4"/>
+                    <TextBox Text="{Binding LayoutNameTemplate, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource ModernTextBox}"
+                             ToolTip="Use {SheetNumber}, {SheetName}, {PaperSize} as placeholders"
+                             Margin="0,0,0,2"/>
+                    <TextBlock Text="Available: {SheetNumber}, {SheetName}, {PaperSize}"
+                               Style="{StaticResource MutedText}" FontSize="11"/>
+
                     <TextBlock Text="DWG Setup" Style="{StaticResource SectionHeader}"/>
                     <ComboBox ItemsSource="{Binding AvailableSetups}"
                               SelectedItem="{Binding SelectedSetup}"
@@ -404,16 +434,49 @@
                               Style="{StaticResource ModernComboBox}"
                               Margin="0,8,0,0"
                               Visibility="{Binding IsSheetScheduleSort, Converter={StaticResource BoolToVisibleConverter}}"/>
+                    <CheckBox Content="Reverse order"
+                              IsChecked="{Binding ReverseSortOrder}"
+                              Style="{StaticResource ModernCheckBox}"
+                              Margin="0,6,0,0"/>
                     <ComboBox ItemsSource="{Binding AvailableVerticalAlignments}"
                               SelectedItem="{Binding SelectedVerticalAlignment}"
                               Style="{StaticResource ModernComboBox}"
                               Margin="0,8,0,0"/>
+
+                    <TextBlock Text="ModelSpace Arrangement" Style="{StaticResource SectionHeader}"/>
+                    <RadioButton Content="Horizontal (side-by-side)"
+                                 IsChecked="{Binding ModelSpaceArrangement, Converter={StaticResource StringEqualityConverter}, ConverterParameter=Horizontal}"
+                                 Foreground="White" Margin="0,2" GroupName="ArrangementMode"
+                                 ToolTip="Arrange sheets horizontally in a single row"/>
+                    <RadioButton Content="Vertical (stacked)"
+                                 IsChecked="{Binding ModelSpaceArrangement, Converter={StaticResource StringEqualityConverter}, ConverterParameter=Vertical}"
+                                 Foreground="White" Margin="0,2" GroupName="ArrangementMode"
+                                 ToolTip="Arrange sheets vertically in a single column"/>
+                    <RadioButton Content="Grid (NxM layout)"
+                                 IsChecked="{Binding ModelSpaceArrangement, Converter={StaticResource StringEqualityConverter}, ConverterParameter=Grid}"
+                                 Foreground="White" Margin="0,2" GroupName="ArrangementMode"
+                                 ToolTip="Arrange sheets in a grid pattern"/>
+                    <Grid Margin="0,6,0,0" Visibility="{Binding IsGridArrangement, Converter={StaticResource BoolToVisibleConverter}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="60"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Columns:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox Grid.Column="1" Text="{Binding GridColumns, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}" ToolTip="Number of columns in grid"/>
+                        <TextBlock Grid.Column="2" Text="Spacing:" VerticalAlignment="Center" Margin="12,0,8,0"/>
+                        <TextBox Grid.Column="3" Text="{Binding CustomSpacing, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}" ToolTip="Gap between sheets (mm)"/>
+                    </Grid>
 
                     <TextBlock Text="Options" Style="{StaticResource SectionHeader}"/>
                     <CheckBox Content="Smart View Scale" IsChecked="{Binding SmartViewScale}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Open after export" IsChecked="{Binding OpenAfterExport}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Progress always on top" IsChecked="{Binding ProgressAlwaysOnTop}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Preserve coincident lines" IsChecked="{Binding PreserveCoincidentLines}" Style="{StaticResource ModernCheckBox}"/>
+                    <CheckBox Content="Merge layers (consolidate CAD layers)" IsChecked="{Binding MergeLayers}" Style="{StaticResource ModernCheckBox}" ToolTip="Uncheck to reduce export time"/>
 
                     <Border Background="#2D2D30"
                             BorderBrush="#3E3E3E"

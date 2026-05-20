@@ -26,6 +26,13 @@ namespace Licorp_CombineCAD.Services
         private int _expectedSheetCount;
         private bool _lastRunReturnedPluginStatus;
 
+        // New sorting and alignment fields
+        private string _sheetSortMode = "SheetNumber";
+        private bool _reverseSortOrder = false;
+        private string _modelSpaceArrangement = "Grid";
+        private int _gridColumns = 5;
+        private double _customSpacing = 100.0;
+
         public DwgMergeService(
             string accoreconsolePath = null,
             string acadPath = null)
@@ -76,6 +83,31 @@ namespace Licorp_CombineCAD.Services
             _reliability.MergeLayers = mergeLayers;
         }
 
+        public void SetSheetSortMode(string sortMode)
+        {
+            _sheetSortMode = sortMode ?? "SheetNumber";
+        }
+
+        public void SetReverseSortOrder(bool reverse)
+        {
+            _reverseSortOrder = reverse;
+        }
+
+        public void SetModelSpaceArrangement(string arrangement)
+        {
+            _modelSpaceArrangement = arrangement ?? "Grid";
+        }
+
+        public void SetGridColumns(int columns)
+        {
+            _gridColumns = Math.Max(1, columns);
+        }
+
+        public void SetCustomSpacing(double spacing)
+        {
+            _customSpacing = spacing;
+        }
+
         public void EnsurePluginInstalled()
         {
             if (IsPluginLoaded) return;
@@ -107,17 +139,19 @@ namespace Licorp_CombineCAD.Services
             List<string> dwgFiles,
             string outputPath,
             List<string> layoutNames,
+            List<string> paperSizes,
             IProgress<MergeProgressInfo> progress = null,
             CancellationToken cancellationToken = default)
         {
             // Route MultiLayout through ModelFirstMultiLayout mode in plugin (Mlabs-style behavior)
-            return await MergeAsync(dwgFiles, outputPath, layoutNames, "ModelFirstMultiLayout", null, progress, cancellationToken);
+            return await MergeAsync(dwgFiles, outputPath, layoutNames, paperSizes, "ModelFirstMultiLayout", null, progress, cancellationToken);
         }
 
         public async Task<bool> MergeToSingleLayoutAsync(
             List<string> dwgFiles,
             string outputPath,
-            string layoutName = "Combined",
+            string layoutName,
+            List<string> paperSizes,
             IProgress<MergeProgressInfo> progress = null,
             CancellationToken cancellationToken = default)
         {
@@ -125,13 +159,14 @@ namespace Licorp_CombineCAD.Services
                 ? null
                 : Enumerable.Repeat(layoutName, dwgFiles.Count).ToList();
 
-            return await MergeAsync(dwgFiles, outputPath, layoutNames, "SingleLayout", null, progress, cancellationToken);
+            return await MergeAsync(dwgFiles, outputPath, layoutNames, paperSizes, "SingleLayout", null, progress, cancellationToken);
         }
 
         public async Task<bool> MergeToModelSpaceAsync(
             List<string> dwgFiles,
             string outputPath,
-            List<string> layoutNames = null,
+            List<string> layoutNames,
+            List<string> paperSizes,
             IProgress<MergeProgressInfo> progress = null,
             CancellationToken cancellationToken = default)
         {
@@ -146,7 +181,7 @@ namespace Licorp_CombineCAD.Services
                 }
 
                 seedPath = CreateConsoleSeedFile(firstValid);
-                return await MergeAsync(dwgFiles, outputPath, layoutNames, "ModelSpace", seedPath, progress, cancellationToken);
+                return await MergeAsync(dwgFiles, outputPath, layoutNames, paperSizes, "ModelSpace", seedPath, progress, cancellationToken);
             }
             finally
             {
@@ -158,6 +193,7 @@ namespace Licorp_CombineCAD.Services
             List<string> dwgFiles,
             string outputPath,
             List<string> layoutNames,
+            List<string> paperSizes,
             string mode,
             string inputOverride,
             IProgress<MergeProgressInfo> progress,
@@ -187,6 +223,39 @@ namespace Licorp_CombineCAD.Services
                 return false;
             }
 
+            // Check available disk space to ensure we can write the output safely
+            try
+            {
+                var outputDir = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(outputDir))
+                {
+                    if (outputDir.StartsWith("\\\\") || outputDir.StartsWith("//"))
+                    {
+                        Trace.WriteLine($"[Merge] Output path is UNC share: {outputDir}. Skipping local disk space check.");
+                    }
+                    else
+                    {
+                        var root = Path.GetPathRoot(outputDir);
+                        if (!string.IsNullOrEmpty(root))
+                        {
+                            var drive = new DriveInfo(root);
+                            long requiredBytes = validFiles.Sum(f => new FileInfo(f).Length) * 2;
+                            long minRequired = Math.Max(50L * 1024 * 1024, requiredBytes);
+                            if (drive.AvailableFreeSpace < minRequired)
+                            {
+                                LastError = $"Insufficient disk space on drive {root}. Required: {minRequired / (1024 * 1024)} MB, Available: {drive.AvailableFreeSpace / (1024 * 1024)} MB";
+                                Trace.WriteLine($"[Merge] {LastError}");
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Merge] Warning checking disk space: {ex.Message}");
+            }
+
             Trace.WriteLine("[Merge] Skipping pre-merge AcCoreConsole ModelSpace fix; layout merger handles empty/schedule sheets internally.");
 
             string configPath = null;
@@ -201,7 +270,7 @@ namespace Licorp_CombineCAD.Services
                 scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_{mode}_{Guid.NewGuid():N}.scr");
                 statusPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_{mode}_{Guid.NewGuid():N}.status.json");
 
-                File.WriteAllText(configPath, CreateMergeConfig(validFiles, layoutNames, outputPath, mode, statusPath));
+                File.WriteAllText(configPath, CreateMergeConfig(validFiles, layoutNames, paperSizes, outputPath, mode, statusPath));
                 CreateMergeScript(scriptPath, configPath);
 
                 Trace.WriteLine($"[ACAD-RUN] mode={mode}");
@@ -285,7 +354,7 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
-        private string CreateMergeConfig(List<string> dwgFiles, List<string> layoutNames, string outputPath, string mode, string statusPath)
+        private string CreateMergeConfig(List<string> dwgFiles, List<string> layoutNames, List<string> paperSizes, string outputPath, string mode, string statusPath)
         {
             var sheetSetIndexPath = Path.Combine(
                 Path.GetDirectoryName(outputPath) ?? "",
@@ -314,7 +383,10 @@ namespace Licorp_CombineCAD.Services
                     Path = dwgFiles[i],
                     Layout = layoutNames != null && i < layoutNames.Count && !string.IsNullOrWhiteSpace(layoutNames[i])
                         ? layoutNames[i]
-                        : $"Layout{i + 1}"
+                        : $"Layout{i + 1}",
+                    PaperSize = paperSizes != null && i < paperSizes.Count && !string.IsNullOrWhiteSpace(paperSizes[i])
+                        ? paperSizes[i]
+                        : null
                 });
             }
 
@@ -476,11 +548,22 @@ namespace Licorp_CombineCAD.Services
 
                     var outputTask = process.StandardOutput.ReadToEndAsync();
                     var errorTask = process.StandardError.ReadToEndAsync();
-                    var completed = await Task.Run(() => process.WaitForExit(timeoutMs), cancellationToken);
+                    
+                    bool completed = false;
+                    try
+                    {
+                        completed = await Task.Run(() => process.WaitForExit(timeoutMs), cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Trace.WriteLine($"[ACAD-RUN] Process execution cancelled by token. Terminating process tree.");
+                        KillProcessAndChildren(process);
+                        throw;
+                    }
 
                     if (!completed)
                     {
-                        try { process.Kill(); } catch { }
+                        KillProcessAndChildren(process);
                         LastError = $"{engineName} timed out after {timeoutMs / 1000} seconds.";
                         return false;
                     }
@@ -520,6 +603,51 @@ namespace Licorp_CombineCAD.Services
                 LastError = $"{engineName} error: {ex.Message}";
                 Trace.WriteLine($"[Merge] {LastError}");
                 return false;
+            }
+        }
+
+        private void KillProcessAndChildren(Process process)
+        {
+            if (process == null) return;
+            try
+            {
+                int pid = process.Id;
+                Trace.WriteLine($"[ProcessUtility] Terminating process tree for PID {pid}");
+
+#if NETCOREAPP
+                try
+                {
+                    process.Kill(true);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[ProcessUtility] .NET Core Kill(true) failed: {ex.Message}. Falling back to taskkill.");
+                }
+#endif
+
+                // Fallback for .NET Framework or if Kill(true) failed: Use taskkill to kill process tree
+                try
+                {
+                    using (var killProcess = new Process())
+                    {
+                        killProcess.StartInfo.FileName = "taskkill";
+                        killProcess.StartInfo.Arguments = $"/F /T /PID {pid}";
+                        killProcess.StartInfo.CreateNoWindow = true;
+                        killProcess.StartInfo.UseShellExecute = false;
+                        killProcess.Start();
+                        killProcess.WaitForExit(3000);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[ProcessUtility] taskkill failed: {ex.Message}. Falling back to standard Kill.");
+                    try { process.Kill(); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[ProcessUtility] Failed to terminate process: {ex.Message}");
             }
         }
 
@@ -855,6 +983,7 @@ namespace Licorp_CombineCAD.Services
         {
             public string Path { get; set; }
             public string Layout { get; set; }
+            public string PaperSize { get; set; }
         }
 
         private class MergeStatusDto

@@ -28,9 +28,17 @@ namespace Licorp_CombineCAD.Models
 
         // ===== Geometry Options =====
         private bool _preserveCoincidentLines = false;
+        private bool _mergeLayers = true;
 
         private VerticalAlignment _verticalAlign = VerticalAlignment.Top;
         private SortMode _sortMode = SortMode.SheetNumber;
+        private string _modelSpaceArrangement = "Horizontal";
+        private int _gridColumns = 3;
+        private double _customSpacing = 50.0;
+        private bool _reverseSortOrder = false;
+
+        // ===== Layout Name Template (Phase 3) =====
+        private string _layoutNameTemplate = "{SheetNumber} - {SheetName}";
 
         // ===== Output =====
         public string OutputFolder
@@ -102,6 +110,12 @@ namespace Licorp_CombineCAD.Models
             set { _preserveCoincidentLines = value; OnPropertyChanged(); }
         }
 
+        public bool MergeLayers
+        {
+            get => _mergeLayers;
+            set { _mergeLayers = value; OnPropertyChanged(); }
+        }
+
         public VerticalAlignment VerticalAlign
         {
             get => _verticalAlign;
@@ -112,6 +126,42 @@ namespace Licorp_CombineCAD.Models
         {
             get => _sortMode;
             set { _sortMode = value; OnPropertyChanged(); }
+        }
+
+        public string ModelSpaceArrangement
+        {
+            get => _modelSpaceArrangement;
+            set { _modelSpaceArrangement = value; OnPropertyChanged(); }
+        }
+
+        public int GridColumns
+        {
+            get => _gridColumns;
+            set { _gridColumns = value; OnPropertyChanged(); }
+        }
+
+        public double CustomSpacing
+        {
+            get => _customSpacing;
+            set { _customSpacing = value; OnPropertyChanged(); }
+        }
+
+        public bool ReverseSortOrder
+        {
+            get => _reverseSortOrder;
+            set { _reverseSortOrder = value; OnPropertyChanged(); }
+        }
+
+        // ===== Layout Name Template (Phase 3) =====
+        /// <summary>
+        /// Template for layout names in merged DWG.
+        /// Available placeholders: {SheetNumber}, {SheetName}, {PaperSize}
+        /// Example: "{PaperSize} - {SheetName}" produces "A1 - Floor Plan"
+        /// </summary>
+        public string LayoutNameTemplate
+        {
+            get => _layoutNameTemplate;
+            set { _layoutNameTemplate = value; OnPropertyChanged(); }
         }
 
         // ===== INotifyPropertyChanged =====

@@ -1,4 +1,4 @@
-namespace Licorp_CombineCAD.Models
+﻿namespace Licorp_CombineCAD.Models
 {
     /// <summary>
     /// Export modes supported by CombineCAD
@@ -24,6 +24,21 @@ namespace Licorp_CombineCAD.Models
         /// (with title blocks, arranged in grid layout)
         /// Requires AutoCAD (AcCoreConsole.exe)
         /// </summary>
-        ModelSpace
+        ModelSpace,
+
+        /// <summary>
+        /// Export sheets with exact 1:1 scale - no scaling applied.
+        /// Paper size = Revit sheet size, viewport custom scale = 1.0.
+        /// When plotting: use 1:1 scale on paper.
+        /// </summary>
+        OneToOneScale,
+
+        /// <summary>
+        /// Export sheets with sheet-ratio-based scaling.
+        /// Calculates ratio between sheet size and primary viewport size,
+        /// then applies that ratio to fit content into paper.
+        /// Useful when viewport does not fit the original sheet.
+        /// </summary>
+        SheetRatioScale
     }
 }

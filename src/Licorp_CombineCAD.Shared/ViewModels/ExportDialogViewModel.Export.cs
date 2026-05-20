@@ -122,8 +122,14 @@ namespace Licorp_CombineCAD.ViewModels
             _progressDialog = new ProgressDialog { Topmost = ProgressAlwaysOnTop };
             _progressVm = new ProgressViewModel(() => _cancellationTokenSource?.Cancel());
             _progressDialog.DataContext = _progressVm;
+            
+            // Update UI immediately before showing dialog
+            _progressVm.Update("Preparing", "Initializing export...", 0, selectedSheets.Count * 2);
             _progressVm.StartTimer();
             _progressDialog.Show();
+            
+            // Force UI update
+            await Application.Current.Dispatcher.BeginInvoke(new Action(() => { }));
 
             try
             {
@@ -158,9 +164,23 @@ namespace Licorp_CombineCAD.ViewModels
                     return;
                 }
 
-                if (exportResult != null && exportResult.HasWarnings)
+                var selectedCount = selectedSheets.Count;
+                var exportedCount = exportedFiles.Count;
+                var failedCount = exportResult?.FailedSheets?.Count ?? 0;
+                var skippedCount = exportResult?.SkippedSheets?.Count ?? 0;
+
+                if (exportResult != null && (exportResult.HasWarnings || exportedCount < selectedCount))
                 {
-                    var warningMsg = exportResult.Summary;
+                    var warningMsg = string.Format(
+                        "Selected {0} sheet(s). Exported {1}. Failed {2}. Skipped {3}.",
+                        selectedCount,
+                        exportedCount,
+                        failedCount,
+                        skippedCount);
+
+                    if (exportedCount > 0 && exportedCount < selectedCount)
+                        warningMsg += "\n\nThe process will continue with successfully exported sheets.";
+
                     if (exportResult.FailedSheets.Count > 0)
                         warningMsg += "\n\nFailed: " + string.Join(", ", exportResult.FailedSheets);
                     if (exportResult.SkippedSheets.Count > 0)
@@ -183,14 +203,42 @@ namespace Licorp_CombineCAD.ViewModels
                         var accorePath = AutoCadLocatorService.FindAcCoreConsole(SelectedAutoCADVersion);
                         var acadPath = AutoCadLocatorService.FindAutoCAD(SelectedAutoCADVersion);
                         var mergeService = new DwgMergeService(accorePath, acadPath);
+                        if (!mergeService.IsAvailable)
+                        {
+                            StatusMessage = string.Format("Exported {0} individual DWG files. AutoCAD merge engine not available.", exportedFiles.Count);
+                            if (OpenAfterExport && exportedFiles.Count > 0)
+                                fileToOpen = exportedFiles.First();
+                            goto AfterMerge;
+                        }
+
                         mergeService.SetVerticalAlignment(settings.VerticalAlign.ToString());
                         mergeService.SetDwgVersion(settings.DwgVersion ?? "Current");
                         mergeService.SetExpectedSheetCount(exportedFiles.Count);
+                        mergeService.SetMergeLayers(settings.MergeLayers);
+                        mergeService.SetSheetSortMode(settings.SortMode.ToString());
+                        mergeService.SetReverseSortOrder(settings.ReverseSortOrder);
+                        mergeService.SetModelSpaceArrangement(settings.ModelSpaceArrangement.ToString());
+                        mergeService.SetGridColumns(settings.GridColumns);
+                        mergeService.SetCustomSpacing(settings.CustomSpacing);
 
                         var exportedSheets = exportResult?.ExportedSheets ?? new List<SheetInfo>();
-                        var layoutNames = exportedSheets.Select(s => s.SheetNumber + " - " + s.SheetName).ToList();
+                        // Apply LayoutNameTemplate with {SheetNumber}, {SheetName}, {PaperSize} placeholders
+                        var layoutNameTemplate = settings.LayoutNameTemplate ?? "{SheetNumber} - {SheetName}";
+                        var layoutNames = exportedSheets.Select(s =>
+                            layoutNameTemplate
+                                .Replace("{SheetNumber}", s.SheetNumber ?? "")
+                                .Replace("{SheetName}", s.SheetName ?? "")
+                                .Replace("{PaperSize}", s.PaperSize ?? "")
+                        ).ToList();
                         if (layoutNames.Count != exportedFiles.Count)
                             layoutNames = exportedFiles.Select(Path.GetFileNameWithoutExtension).ToList();
+                        layoutNames = BuildUniqueLayoutNames(layoutNames);
+
+                        // Collect paper sizes from Revit sheet info for accurate paper plot size in merged DWG
+                        var paperSizes = exportedSheets.Select(s => s.PaperSize).ToList();
+                        if (paperSizes.Count != exportedFiles.Count)
+                            paperSizes = Enumerable.Repeat<string>(null, exportedFiles.Count).ToList();
+                        Logger.LogDebug($"[Merge] Paper sizes from Revit: {string.Join(", ", paperSizes.Select(p => p ?? "null"))}");
 
                         var outputPath = GetUniqueOutputPath();
 
@@ -206,20 +254,30 @@ namespace Licorp_CombineCAD.ViewModels
 
                         switch (ExportMode)
                         {
+                            case ExportMode.OneToOneScale:
+                            case ExportMode.SheetRatioScale:
+                                // OneToOneScale and SheetRatioScale use same merge as MultiLayout
+                                // The scaling was already applied during export via SmartScaleService
                             case ExportMode.MultiLayout:
-                                mergeSuccess = await mergeService.MergeToMultiLayoutAsync(exportedFiles, outputPath, layoutNames, mergeProgress, cts.Token);
+                                mergeSuccess = await mergeService.MergeToMultiLayoutAsync(exportedFiles, outputPath, layoutNames, paperSizes, mergeProgress, cts.Token);
                                 break;
                             case ExportMode.SingleLayout:
-                                mergeSuccess = await mergeService.MergeToSingleLayoutAsync(exportedFiles, outputPath, "Combined", mergeProgress, cts.Token);
+                                mergeSuccess = await mergeService.MergeToSingleLayoutAsync(exportedFiles, outputPath, "Combined", paperSizes, mergeProgress, cts.Token);
                                 break;
                             case ExportMode.ModelSpace:
-                                mergeSuccess = await mergeService.MergeToModelSpaceAsync(exportedFiles, outputPath, layoutNames, mergeProgress, cts.Token);
+                                mergeSuccess = await mergeService.MergeToModelSpaceAsync(exportedFiles, outputPath, layoutNames, paperSizes, mergeProgress, cts.Token);
                                 break;
                         }
 
                         if (mergeSuccess)
                         {
-                            StatusMessage = string.Format("Merged {0} files to {1}", exportedFiles.Count, Path.GetFileName(outputPath));
+                            StatusMessage = exportedCount < selectedCount
+                                ? string.Format(
+                                    "Partial success: selected {0}, exported/merged {1}. Output: {2}",
+                                    selectedCount,
+                                    exportedCount,
+                                    Path.GetFileName(outputPath))
+                                : string.Format("Merged {0} files to {1}", exportedFiles.Count, Path.GetFileName(outputPath));
 
                             var finalOutputPath = outputPath;
                             if (!IsLikelyValidCombinedDwg(finalOutputPath, out var validateReason))
@@ -264,6 +322,26 @@ namespace Licorp_CombineCAD.ViewModels
                         if (OpenAfterExport && exportedFiles.Count > 0)
                             fileToOpen = exportedFiles.First();
                     }
+
+                AfterMerge: ;
+                }
+                else
+                {
+                    StatusMessage = string.Format(
+                        "No sheets were exported successfully (selected {0}, failed {1}, skipped {2}).",
+                        selectedCount,
+                        failedCount,
+                        skippedCount);
+
+                    await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        MessageBox.Show(
+                            "No sheet was exported successfully, so merge was skipped.\n\n"
+                            + string.Format("Selected: {0}\nFailed: {1}\nSkipped: {2}", selectedCount, failedCount, skippedCount),
+                            "Export Completed With No Output",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }));
                 }
 
                 _progressVm.StopTimer();
@@ -324,6 +402,39 @@ namespace Licorp_CombineCAD.ViewModels
             }
 
             return path;
+        }
+
+        private static List<string> BuildUniqueLayoutNames(List<string> layoutNames)
+        {
+            var result = new List<string>();
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var rawName in layoutNames ?? new List<string>())
+            {
+                var baseName = SanitizeLayoutName(rawName);
+                var candidate = baseName;
+                var suffix = 1;
+
+                while (!used.Add(candidate))
+                {
+                    suffix++;
+                    candidate = $"{baseName}_{suffix}";
+                }
+
+                result.Add(candidate);
+            }
+
+            return result;
+        }
+
+        private static string SanitizeLayoutName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "Layout";
+
+            var invalidChars = Path.GetInvalidFileNameChars().Concat(new[] { ':', ';' }).Distinct().ToArray();
+            var sanitized = new string(value.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray()).Trim();
+            return string.IsNullOrWhiteSpace(sanitized) ? "Layout" : sanitized;
         }
 
         private bool ConfirmPreflight(SheetPreflightResult result)
@@ -457,7 +568,12 @@ namespace Licorp_CombineCAD.ViewModels
                 SelectedSheetScheduleId = SelectedSheetSchedule?.ElementIdValue ?? "",
                 VerticalAlign = verticalAlign,
                 SortMode = sortMode,
-                PreserveCoincidentLines = PreserveCoincidentLines
+                PreserveCoincidentLines = PreserveCoincidentLines,
+                MergeLayers = MergeLayers,
+                ModelSpaceArrangement = ModelSpaceArrangement,
+                GridColumns = GridColumns,
+                CustomSpacing = CustomSpacing,
+                ReverseSortOrder = ReverseSortOrder
             };
         }
 
