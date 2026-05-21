@@ -3144,6 +3144,8 @@ private void BindXrefsSafe(Database db)
 {
     try
     {
+        SetXrefPathsToRelative(db);
+
         try
         {
             db.ResolveXrefs(false, false);
@@ -3183,6 +3185,94 @@ private void BindXrefsSafe(Database db)
     {
         AcadLogger.LogWarning($"BindXrefsSafe: {ex.Message}");
     }
+}
+
+private void SetXrefPathsToRelative(Database db)
+{
+    try
+    {
+        var hostDwg = db?.Filename;
+        var hostDir = string.IsNullOrWhiteSpace(hostDwg) ? null : Path.GetDirectoryName(hostDwg);
+        if (string.IsNullOrWhiteSpace(hostDir) || !Directory.Exists(hostDir))
+            return;
+
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            int updated = 0;
+
+            foreach (ObjectId btrId in bt)
+            {
+                var btr = tr.GetObject(btrId, OpenMode.ForRead) as BlockTableRecord;
+                if (btr == null || !btr.IsFromExternalReference)
+                    continue;
+
+                var currentPath = btr.PathName;
+                if (string.IsNullOrWhiteSpace(currentPath) || !Path.IsPathRooted(currentPath))
+                    continue;
+
+                string relativePath = TryGetRelativePath(hostDir, currentPath);
+
+                if (string.IsNullOrWhiteSpace(relativePath) || relativePath == currentPath)
+                    continue;
+
+                try
+                {
+                    var btrWrite = (BlockTableRecord)tr.GetObject(btrId, OpenMode.ForWrite);
+                    btrWrite.PathName = relativePath;
+                    updated++;
+                }
+                catch (System.Exception setEx)
+                {
+                    AcadLogger.LogWarning($"SetXrefPathsToRelative: cannot update '{btr.Name}': {setEx.Message}");
+                }
+            }
+
+            tr.Commit();
+
+            if (updated > 0)
+                AcadLogger.LogInfo($"XREF change path type: Make Relative applied to {updated} reference(s)");
+        }
+    }
+    catch (System.Exception ex)
+    {
+        AcadLogger.LogWarning($"SetXrefPathsToRelative: {ex.Message}");
+    }
+}
+
+private string TryGetRelativePath(string baseDir, string targetPath)
+{
+    try
+    {
+        if (string.IsNullOrWhiteSpace(baseDir) || string.IsNullOrWhiteSpace(targetPath))
+            return targetPath;
+
+        var baseUri = new Uri(AppendDirectorySeparator(baseDir));
+        var targetUri = new Uri(targetPath);
+
+        if (!string.Equals(baseUri.Scheme, targetUri.Scheme, StringComparison.OrdinalIgnoreCase))
+            return targetPath;
+
+        var relativeUri = baseUri.MakeRelativeUri(targetUri);
+        var relativePath = Uri.UnescapeDataString(relativeUri.ToString()).Replace('/', Path.DirectorySeparatorChar);
+        return string.IsNullOrWhiteSpace(relativePath) ? targetPath : relativePath;
+    }
+    catch
+    {
+        return targetPath;
+    }
+}
+
+private static string AppendDirectorySeparator(string path)
+{
+    if (string.IsNullOrEmpty(path))
+        return path;
+
+    char lastChar = path[path.Length - 1];
+    if (lastChar != Path.DirectorySeparatorChar && lastChar != Path.AltDirectorySeparatorChar)
+        return path + Path.DirectorySeparatorChar;
+
+    return path;
 }
 
 private void RenameBlocksInDb(Database db, Transaction trans, string prefix)

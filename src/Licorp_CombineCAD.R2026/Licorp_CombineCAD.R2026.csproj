@@ -19,6 +19,10 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
 
+    <!-- .NET Core assembly isolation for Revit 2025+ -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+
     <NoWarn>$(NoWarn);CS0618;CS0612;NU1701;NU1702;MSB3277</NoWarn>
   </PropertyGroup>
 

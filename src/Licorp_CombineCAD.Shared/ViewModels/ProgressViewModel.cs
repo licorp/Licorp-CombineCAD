@@ -26,6 +26,7 @@ namespace Licorp_CombineCAD.ViewModels
         private readonly Stopwatch _stopwatch;
         private CancellationTokenSource _timerCts;
         private Task _timerTask;
+        private string _timeRemaining = "Calculating...";
 
         public ProgressViewModel(Action onCancel = null)
         {
@@ -48,8 +49,29 @@ namespace Licorp_CombineCAD.ViewModels
                     var ts = _stopwatch.Elapsed;
                     var timeStr = $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
                     
+                    string remainingStr = "Calculating...";
+                    if (_percentage > 0)
+                    {
+                        var elapsedMs = _stopwatch.ElapsedMilliseconds;
+                        var totalEstimatedMs = elapsedMs / (_percentage / 100.0);
+                        var remainingMs = totalEstimatedMs - elapsedMs;
+                        if (remainingMs > 0)
+                        {
+                            var tsRemaining = TimeSpan.FromMilliseconds(remainingMs);
+                            remainingStr = $"{tsRemaining.Hours:D2}:{tsRemaining.Minutes:D2}:{tsRemaining.Seconds:D2}";
+                        }
+                        else
+                        {
+                            remainingStr = "00:00:00";
+                        }
+                    }
+
                     Application.Current?.Dispatcher?.InvokeAsync(
-                        () => ElapsedTime = timeStr,
+                        () => 
+                        {
+                            ElapsedTime = timeStr;
+                            TimeRemaining = remainingStr;
+                        },
                         DispatcherPriority.Normal);
                 }
             }, _timerCts.Token);
@@ -62,6 +84,13 @@ namespace Licorp_CombineCAD.ViewModels
             _stopwatch.Stop();
             _timerCts?.Cancel();
             UpdateElapsedTime();
+            TimeRemaining = "00:00:00";
+        }
+
+        public string TimeRemaining
+        {
+            get => _timeRemaining;
+            set { _timeRemaining = value; OnPropertyChanged(); }
         }
 
         public string Phase
@@ -69,7 +98,6 @@ namespace Licorp_CombineCAD.ViewModels
             get => _phase;
             set { _phase = value; OnPropertyChanged(); }
         }
-
         public string CurrentItem
         {
             get => _currentItem;

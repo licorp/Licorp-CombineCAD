@@ -119,14 +119,11 @@ namespace Licorp_CombineCAD.ViewModels
             IsExporting = true;
             _cancellationTokenSource = new CancellationTokenSource();
 
-            _progressDialog = new ProgressDialog { Topmost = ProgressAlwaysOnTop };
-            _progressVm = new ProgressViewModel(() => _cancellationTokenSource?.Cancel());
-            _progressDialog.DataContext = _progressVm;
+            ProgressVm = new ProgressViewModel(() => _cancellationTokenSource?.Cancel());
             
-            // Update UI immediately before showing dialog
-            _progressVm.Update("Preparing", "Initializing export...", 0, selectedSheets.Count * 2);
-            _progressVm.StartTimer();
-            _progressDialog.Show();
+            // Update UI immediately
+            ProgressVm.Update("Preparing", "Initializing export...", 0, selectedSheets.Count * 2);
+            ProgressVm.StartTimer();
             
             // Force UI update
             await Application.Current.Dispatcher.BeginInvoke(new Action(() => { }));
@@ -135,7 +132,7 @@ namespace Licorp_CombineCAD.ViewModels
             {
                 var options = _exportService.BuildExportOptions(settings);
                 var cts = _cancellationTokenSource;
-                var progressVm = _progressVm;
+                var progressVm = ProgressVm;
                 var totalSheets = selectedSheets.Count;
 
                 ExportResult exportResult = await _revitThreadService.RunOnRevitThreadAsync(app =>
@@ -159,8 +156,8 @@ namespace Licorp_CombineCAD.ViewModels
                 if (cts.Token.IsCancellationRequested)
                 {
                     StatusMessage = "Export cancelled.";
-                    _progressVm.StopTimer();
-                    _progressVm.Completed = true;
+                    ProgressVm.StopTimer();
+                    ProgressVm.Completed = true;
                     return;
                 }
 
@@ -198,7 +195,7 @@ namespace Licorp_CombineCAD.ViewModels
                 {
                     if (IsAutoCADAvailable)
                     {
-                        _progressVm.UpdatePhase("Merging");
+                        ProgressVm.UpdatePhase("Merging");
 
                         var accorePath = AutoCadLocatorService.FindAcCoreConsole(SelectedAutoCADVersion);
                         var acadPath = AutoCadLocatorService.FindAutoCAD(SelectedAutoCADVersion);
@@ -344,15 +341,9 @@ namespace Licorp_CombineCAD.ViewModels
                     }));
                 }
 
-                _progressVm.StopTimer();
-                _progressVm.Completed = true;
+                ProgressVm.StopTimer();
+                ProgressVm.Completed = true;
                 SaveSettings();
-
-                await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    try { _progressDialog.Close(); }
-                    catch (Exception closeEx) { Trace.WriteLine("[ExportDialog] Close dialog error: " + closeEx.Message); }
-                }));
                 await Task.Delay(500);
 
                 if (fileToOpen != null)
@@ -371,16 +362,11 @@ namespace Licorp_CombineCAD.ViewModels
             finally
             {
                 IsExporting = false;
-                if (_progressVm != null && !_progressVm.Completed)
+                if (ProgressVm != null && !ProgressVm.Completed)
                 {
-                    _progressVm.StopTimer();
-                    _progressVm.Completed = true;
+                    ProgressVm.StopTimer();
+                    ProgressVm.Completed = true;
                     await Task.Delay(500);
-                    await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        try { _progressDialog.Close(); }
-                        catch (Exception closeEx) { Trace.WriteLine("[ExportDialog] Close dialog error: " + closeEx.Message); }
-                    }));
                 }
 
                 _cancellationTokenSource?.Dispose();

@@ -62,8 +62,13 @@ namespace Licorp_CombineCAD.ViewModels
         private int _selectedCount;
         private SheetScheduleInfo _selectedSheetSchedule;
         private CancellationTokenSource _cancellationTokenSource;
-        private ProgressDialog _progressDialog;
         private ProgressViewModel _progressVm;
+
+        public ProgressViewModel ProgressVm
+        {
+            get => _progressVm;
+            private set { _progressVm = value; OnPropertyChanged(); }
+        }
 
         public ExportDialogViewModel(UIDocument uiDocument)
         {
@@ -77,6 +82,7 @@ namespace Licorp_CombineCAD.ViewModels
             _viewSheetSetService = new ViewSheetSetService(_document);
             _profileService = new ProfileService();
             _revitThreadService = new RevitThreadService();
+            ProgressVm = new ProgressViewModel(() => _cancellationTokenSource?.Cancel());
 
             Profiles = new ObservableCollection<ExportProfile>(_profileService.LoadProfiles());
             _profile = _profileService.LoadLastProfile();

@@ -15,6 +15,9 @@
     <Page Include="$(MSBuildThisFileDirectory)**\*.xaml" SubType="Designer" Generator="MSBuild:Compile" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="$(MSBuildThisFileDirectory)Resources\**\*.png" />
+    <Resource Include="$(MSBuildThisFileDirectory)Resources\**\*.png" />
+    <None Include="$(MSBuildThisFileDirectory)Resources\**\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 </Project>

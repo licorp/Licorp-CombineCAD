@@ -527,15 +527,54 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <TextBlock Grid.Column="0"
-                       Text="{Binding StatusMessage}"
-                       Foreground="#A0A0A0"
-                       TextTrimming="CharacterEllipsis"
-                       VerticalAlignment="Center"/>
+            <Grid Grid.Column="0" Margin="0,0,16,0">
+                <TextBlock Text="{Binding StatusMessage}"
+                           Foreground="#A0A0A0"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center"
+                           Visibility="{Binding IsExporting, Converter={StaticResource BoolToHiddenConverter}}"/>
+
+                <GroupBox Header="Progress" 
+                          Foreground="#A0A0A0" 
+                          BorderBrush="#3E3E3E" 
+                          Padding="12,8"
+                          Visibility="{Binding IsExporting, Converter={StaticResource BoolToVisibleConverter}}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        
+                        <Grid Grid.Row="0" Margin="0,0,0,6">
+                            <ProgressBar Value="{Binding ProgressVm.Percentage}" Minimum="0" Maximum="100" Height="16" BorderThickness="0">
+                                <ProgressBar.Template>
+                                    <ControlTemplate TargetType="ProgressBar">
+                                        <Grid>
+                                            <Border x:Name="PART_Track" Background="#2D2D2D" CornerRadius="8"/>
+                                            <Border x:Name="PART_Indicator" CornerRadius="8" Background="#17C1C1" HorizontalAlignment="Left"/>
+                                        </Grid>
+                                    </ControlTemplate>
+                                </ProgressBar.Template>
+                            </ProgressBar>
+                            <TextBlock Text="{Binding ProgressVm.Percentage, StringFormat={}{0:F0}%}" 
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" 
+                                       Foreground="White" FontSize="11" FontWeight="Bold"/>
+                        </Grid>
+                        
+                        <Grid Grid.Row="1">
+                            <TextBlock Text="{Binding ProgressVm.CurrentItem}" 
+                                       HorizontalAlignment="Left" Foreground="White"/>
+                            <TextBlock Text="{Binding ProgressVm.TimeRemaining, StringFormat='Time Remaining: {0}'}" 
+                                       HorizontalAlignment="Right" Foreground="White"/>
+                        </Grid>
+                    </Grid>
+                </GroupBox>
+            </Grid>
 
             <Border Grid.Column="1"
                     Style="{StaticResource VersionBadge}"
-                    HorizontalAlignment="Right">
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Bottom">
                 <TextBlock Text="{Binding AppVersionText}"
                            Foreground="#EAF4FF"
                            FontWeight="SemiBold"
