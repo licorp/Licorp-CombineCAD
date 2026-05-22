@@ -44,7 +44,7 @@ namespace Licorp_CombineCAD.ViewModels
         private string _selectedSetup;
         private string _selectedAutoCADVersion;
         private string _outputFolder;
-        private string _selectedDwgVersion = "2018";
+        private string _selectedDwgVersion = "2025";
         private string _selectedSortMode = "Sheet Number";
         private string _selectedVerticalAlignment = "Top";
         private string _fileNameTemplate = "{SheetNumber} - {SheetName}";
@@ -114,7 +114,7 @@ namespace Licorp_CombineCAD.ViewModels
         public ObservableCollection<ViewSheetSetInfo> AvailableViewSheetSets { get; } = new ObservableCollection<ViewSheetSetInfo>();
         public ObservableCollection<string> AvailableSetups { get; } = new ObservableCollection<string>();
         public ObservableCollection<string> AvailableAutoCADVersions { get; } = new ObservableCollection<string>();
-        public ObservableCollection<string> AvailableDwgVersions { get; } = new ObservableCollection<string> { "2018", "2013", "2010", "2007" };
+        public ObservableCollection<string> AvailableDwgVersions { get; } = new ObservableCollection<string> { "2025", "2018", "2013", "2010", "2007" };
         public ObservableCollection<string> AvailableSortModes { get; } = new ObservableCollection<string> { "Sheet Number", "Name", "Custom", "Revit Sheet Schedule" };
         public ObservableCollection<SheetScheduleInfo> AvailableSheetSchedules { get; } = new ObservableCollection<SheetScheduleInfo>();
         public ObservableCollection<string> AvailableVerticalAlignments { get; } = new ObservableCollection<string> { "Top", "Center", "Bottom" };
