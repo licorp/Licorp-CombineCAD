@@ -83,6 +83,50 @@ namespace Licorp_CombineCAD.Services
             _sheetSortMode = sortMode ?? "SheetNumber";
         }
 
+        /// <summary>
+        /// Calculates dynamic timeout based on sheet count and export mode.
+        /// ModelSpace is slower due to geometry conversion.
+        /// </summary>
+        private int CalculateTimeoutMs(int sheetCount, string mode)
+        {
+            // Base timeout: 30 seconds for startup/initialization
+            const int baseTimeoutMs = 30000;
+
+            // Per-sheet timeout varies by mode
+            int perSheetTimeoutMs;
+            switch (mode)
+            {
+                case "ModelSpace":
+                    // ModelSpace is slowest - geometry conversion per sheet
+                    perSheetTimeoutMs = 45000; // 45 seconds per sheet
+                    break;
+                case "SingleLayout":
+                    // SingleLayout is faster - one layout per file
+                    perSheetTimeoutMs = 25000; // 25 seconds per sheet
+                    break;
+                case "ModelFirstMultiLayout":
+                case "MultiLayout":
+                default:
+                    // MultiLayout is moderate
+                    perSheetTimeoutMs = 30000; // 30 seconds per sheet
+                    break;
+            }
+
+            // Calculate total timeout
+            int calculatedTimeout = baseTimeoutMs + (sheetCount * perSheetTimeoutMs);
+
+            // Apply mode multiplier for ModelSpace (slower)
+            if (mode == "ModelSpace")
+            {
+                calculatedTimeout = (int)(calculatedTimeout * 1.3); // 30% more time
+            }
+
+            // Cap at maximum (4 hours)
+            const int maxTimeoutMs = 4 * 60 * 60 * 1000; // 4 hours
+
+            return Math.Min(calculatedTimeout, maxTimeoutMs);
+        }
+
         public void EnsurePluginInstalled()
         {
             if (IsPluginLoaded) return;
@@ -255,6 +299,10 @@ namespace Licorp_CombineCAD.Services
                 Trace.WriteLine($"[ACAD-RUN] outputPath={outputPath}");
                 Trace.WriteLine($"[ACAD-RUN] validSources={validFiles.Count}, expectedSheets={_expectedSheetCount}");
 
+                // Calculate dynamic timeout based on sheet count and mode
+                var timeoutMs = CalculateTimeoutMs(validFiles.Count, mode);
+                Trace.WriteLine($"[ACAD-RUN] calculatedTimeout={timeoutMs / 1000}s for {validFiles.Count} sheets in {mode} mode");
+
                 progress?.Report(new MergeProgressInfo
                 {
                     Phase = "Merging",
@@ -298,7 +346,7 @@ namespace Licorp_CombineCAD.Services
 
                 try
                 {
-                    var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, 1200000, cancellationToken);
+                    var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, timeoutMs, cancellationToken);
                     LastLogPath = LastLogPath ?? GetLatestMergeLogPath();
                     return success;
                 }
