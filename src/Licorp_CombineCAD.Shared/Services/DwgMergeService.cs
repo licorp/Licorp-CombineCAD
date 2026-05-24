@@ -26,12 +26,7 @@ namespace Licorp_CombineCAD.Services
         private int _expectedSheetCount;
         private bool _lastRunReturnedPluginStatus;
 
-        // New sorting and alignment fields
         private string _sheetSortMode = "SheetNumber";
-        private bool _reverseSortOrder = false;
-        private string _modelSpaceArrangement = "Grid";
-        private int _gridColumns = 5;
-        private double _customSpacing = 100.0;
 
         public DwgMergeService(
             string accoreconsolePath = null,
@@ -86,26 +81,6 @@ namespace Licorp_CombineCAD.Services
         public void SetSheetSortMode(string sortMode)
         {
             _sheetSortMode = sortMode ?? "SheetNumber";
-        }
-
-        public void SetReverseSortOrder(bool reverse)
-        {
-            _reverseSortOrder = reverse;
-        }
-
-        public void SetModelSpaceArrangement(string arrangement)
-        {
-            _modelSpaceArrangement = arrangement ?? "Grid";
-        }
-
-        public void SetGridColumns(int columns)
-        {
-            _gridColumns = Math.Max(1, columns);
-        }
-
-        public void SetCustomSpacing(double spacing)
-        {
-            _customSpacing = spacing;
         }
 
         public void EnsurePluginInstalled()
@@ -323,7 +298,7 @@ namespace Licorp_CombineCAD.Services
 
                 try
                 {
-                    var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, 600000, cancellationToken);
+                    var success = await RunMergeEngineAsync(scriptPath, inputPath, outputPath, statusPath, 1200000, cancellationToken);
                     LastLogPath = LastLogPath ?? GetLatestMergeLogPath();
                     return success;
                 }
@@ -564,7 +539,7 @@ namespace Licorp_CombineCAD.Services
                     if (!completed)
                     {
                         KillProcessAndChildren(process);
-                        LastError = $"{engineName} timed out after {timeoutMs / 1000} seconds.";
+                        LastError = $"{engineName} timed out after {timeoutMs / 1000} seconds. For large projects (20+ sheets), this is expected — the merge is still running. Check the log file for progress.";
                         return false;
                     }
 
@@ -857,7 +832,7 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
-        private bool IsLikelyValidCombinedDwg(string outputPath, out string reason)
+        internal static bool IsLikelyValidCombinedDwg(string outputPath, out string reason)
         {
             reason = null;
 

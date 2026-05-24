@@ -22,12 +22,7 @@ namespace Licorp_CombineCAD.Services
 
             try
             {
-                var allSheetsSet = new ViewSheetSetInfo
-                {
-                    Name = "All Sheets",
-                    IsBuiltIn = true
-                };
-                result.Add(allSheetsSet);
+                result.Add(new ViewSheetSetInfo { Name = "All Sheets", IsBuiltIn = true });
 
                 var savedSets = new FilteredElementCollector(_document)
                     .OfClass(typeof(ViewSheetSet))
@@ -37,11 +32,7 @@ namespace Licorp_CombineCAD.Services
 
                 foreach (var savedSet in savedSets)
                 {
-                    var info = new ViewSheetSetInfo
-                    {
-                        Name = savedSet.Name,
-                        IsBuiltIn = false
-                    };
+                    var info = new ViewSheetSetInfo { Name = savedSet.Name, IsBuiltIn = false };
 
                     try
                     {
@@ -51,7 +42,7 @@ namespace Licorp_CombineCAD.Services
                             {
                                 if (view is ViewSheet sheet && !sheet.IsTemplate)
                                 {
-                                    var idValue = GetElementIdValue(sheet.Id);
+                                    var idValue = RevitApiHelper.GetElementIdString(sheet.Id);
                                     if (!string.IsNullOrWhiteSpace(idValue) &&
                                         !info.SheetIdValues.Contains(idValue, StringComparer.OrdinalIgnoreCase))
                                     {
@@ -149,28 +140,6 @@ namespace Licorp_CombineCAD.Services
                     throw;
                 }
             }
-        }
-
-        public static string GetElementIdValue(ElementId id)
-        {
-            if (id == null)
-                return "";
-
-            try
-            {
-                var valueProperty = typeof(ElementId).GetProperty("Value");
-                if (valueProperty != null)
-                    return Convert.ToInt64(valueProperty.GetValue(id, null)).ToString();
-
-                var integerValueProperty = typeof(ElementId).GetProperty("IntegerValue");
-                if (integerValueProperty != null)
-                    return Convert.ToInt64(integerValueProperty.GetValue(id, null)).ToString();
-            }
-            catch
-            {
-            }
-
-            return "";
         }
     }
 }

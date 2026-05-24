@@ -1,11 +1,7 @@
 using Autodesk.Revit.UI;
 using System;
-using System.Diagnostics;
-using System.IO;
-using System.Reflection;
-using System.Windows;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
+using Licorp_CombineCAD.Commands;
+using Licorp_CombineCAD.Extensions;
 using Licorp_CombineCAD.Services;
 
 namespace Licorp_CombineCAD
@@ -14,27 +10,15 @@ namespace Licorp_CombineCAD
     {
         public Result OnStartup(UIControlledApplication application)
         {
-            // Early trace to verify add-in is loaded by Revit
             System.Diagnostics.Trace.WriteLine("[LicorpCAD] OnStartup called!");
             System.Diagnostics.Debug.WriteLine("[LicorpCAD] OnStartup called!");
 
             try
             {
                 Logger.Initialize();
-                Logger.LogSection("LICORP_COMBINECAD Add-in Starting");
+                Logger.LogInfo("LICORP_COMBINECAD Add-in Starting");
                 Logger.LogInfo($"Revit Version: {application.ControlledApplication.VersionNumber}");
                 Logger.LogInfo($"UI Culture: {System.Globalization.CultureInfo.CurrentUICulture.Name}");
-
-                string assemblyPath = Assembly.GetExecutingAssembly().Location;
-                Logger.LogInfo($"Assembly Location: {assemblyPath}");
-
-                if (string.IsNullOrEmpty(assemblyPath))
-                {
-                    var ex = new InvalidOperationException("Assembly location is null/empty. Add-in cannot load.");
-                    Logger.LogException(ex, "Startup");
-                    ShowErrorDialog("Assembly Load Error", "Cannot determine assembly path.\n\n" + ex.Message);
-                    return Result.Failed;
-                }
 
                 string tabName = "Licorp";
                 try
@@ -48,63 +32,57 @@ namespace Licorp_CombineCAD
                     ShowErrorDialog("Ribbon Tab Error", $"Failed to create tab '{tabName}': {tabEx.Message}");
                 }
 
-                RibbonPanel panel = application.CreateRibbonPanel(tabName, "Combine CAD");
+                var panel = application.CreateRibbonPanel(tabName, "Combine CAD");
 
-                string ns = "Licorp_CombineCAD.Commands";
+                const string ns = "Licorp_CombineCAD.Commands";
 
-                var multiLayoutData = new PushButtonData(
-                    "ExportMultiLayout",
-                    "Multi-Layout\nDWG",
-                    assemblyPath,
-                    $"{ns}.ExportMultiLayoutCommand");
-                multiLayoutData.ToolTip = "Export sheets to 1 DWG file with multiple layouts";
-                multiLayoutData.LongDescription = "Export selected Revit sheets to individual DWG files, " +
-                    "then automatically merge them into a single DWG with multiple layouts " +
-                    "(each sheet = 1 layout). Requires AutoCAD.";
-                var multiBtn = panel.AddItem(multiLayoutData) as PushButton;
-                SetButtonIcon(multiBtn, "multi_layout", Colors.DodgerBlue);
+                panel.AddPushButton("ExportMultiLayout", "Multi-Layout\nDWG")
+                    .WithCommand($"{ns}.ExportMultiLayoutCommand")
+                    .WithToolTip("Export sheets to 1 DWG file with multiple layouts")
+                    .WithLongDescription("Export selected Revit sheets to individual DWG files, " +
+                        "then automatically merge them into a single DWG with multiple layouts " +
+                        "(each sheet = 1 layout). Requires AutoCAD.")
+                    .WithIcon("multi_layout")
+                    .Build();
 
-                var singleLayoutData = new PushButtonData(
-                    "ExportSingleLayout",
-                    "Single Layout\nDWG",
-                    assemblyPath,
-                    $"{ns}.ExportSingleLayoutCommand");
-                singleLayoutData.ToolTip = "Combine all sheets into 1 DWG with 1 layout";
-                var singleBtn = panel.AddItem(singleLayoutData) as PushButton;
-                SetButtonIcon(singleBtn, "single_layout", Colors.MediumOrchid);
+                panel.AddPushButton("ExportSingleLayout", "Single Layout\nDWG")
+                    .WithCommand($"{ns}.ExportSingleLayoutCommand")
+                    .WithToolTip("Combine all sheets into 1 DWG with 1 layout")
+                    .WithIcon("single_layout")
+                    .Build();
 
-                var modelSpaceData = new PushButtonData(
-                    "ExportModelSpace",
-                    "Model Space\nDWG",
-                    assemblyPath,
-                    $"{ns}.ExportModelSpaceCommand");
-                modelSpaceData.ToolTip = "Export sheets to Model Space with title blocks";
-                var msBtn = panel.AddItem(modelSpaceData) as PushButton;
-                SetButtonIcon(msBtn, "model_space", Colors.DarkOrange);
+                panel.AddPushButton("ExportModelSpace", "Model Space\nDWG")
+                    .WithCommand($"{ns}.ExportModelSpaceCommand")
+                    .WithToolTip("Export sheets to Model Space with title blocks")
+                    .WithIcon("model_space")
+                    .Build();
 
                 panel.AddSeparator();
 
-                var layerData = new PushButtonData(
-                    "LayerManager",
-                    "Layer\nManager",
-                    assemblyPath,
-                    $"{ns}.LayerManagerCommand");
-                layerData.ToolTip = "Export/Import DWG Export Layer settings";
-                layerData.LongDescription = "Save and load DWG export layer mapping to/from .txt files " +
-                    "for sharing across projects and team members.";
-                var layerBtn = panel.AddItem(layerData) as PushButton;
-                SetButtonIcon(layerBtn, "layers", Colors.Gold);
+                panel.AddPushButton("LayerManager", "Layer\nManager")
+                    .WithCommand($"{ns}.LayerManagerCommand")
+                    .WithToolTip("Export/Import DWG Export Layer settings")
+                    .WithLongDescription("Save and load DWG export layer mapping to/from .txt files " +
+                        "for sharing across projects and team members.")
+                    .WithIcon("layers")
+                    .Build();
 
                 Logger.LogInfo("Ribbon setup completed");
-                Logger.LogSection("Add-in Ready");
+                Logger.LogInfo("Add-in Ready");
                 return Result.Succeeded;
             }
             catch (Exception ex)
             {
-                Logger.LogException(ex, "OnStartup Critical Failure");
+                Logger.LogError($"OnStartup Critical Failure: {ex}");
                 ShowErrorDialog("Licorp CombineCAD Load Failed", ex.ToString());
                 return Result.Failed;
             }
+        }
+
+        public Result OnShutdown(UIControlledApplication application)
+        {
+            Logger.LogInfo("Add-in shutting down");
+            return Result.Succeeded;
         }
 
         private static void ShowErrorDialog(string title, string message)
@@ -121,117 +99,6 @@ namespace Licorp_CombineCAD
                 td.Show();
             }
             catch { }
-        }
-
-        public Result OnShutdown(UIControlledApplication application)
-        {
-            Logger.LogInfo("Add-in shutting down");
-            return Result.Succeeded;
-        }
-
-        private static void SetButtonIcon(RibbonButton button, string iconName, Color fallbackColor)
-        {
-            try
-            {
-                var assemblyPath = Assembly.GetExecutingAssembly().Location;
-                var assemblyDir = Path.GetDirectoryName(assemblyPath);
-
-                // Try loading from file path (icons copied to output folder)
-                var largePath = Path.Combine(assemblyDir, "Resources", "Icons", $"{iconName}_32.png");
-                var smallPath = Path.Combine(assemblyDir, "Resources", "Icons", $"{iconName}_16.png");
-
-                if (File.Exists(largePath))
-                {
-                    var largeBitmap = new BitmapImage();
-                    largeBitmap.BeginInit();
-                    largeBitmap.UriSource = new Uri(largePath, UriKind.Absolute);
-                    largeBitmap.CacheOption = BitmapCacheOption.OnLoad;
-                    largeBitmap.EndInit();
-                    largeBitmap.Freeze();
-                    button.LargeImage = largeBitmap;
-                }
-                else
-                {
-                    button.LargeImage = CreateTextIcon(iconName.Replace('_', ' ').ToUpper(), fallbackColor, 32);
-                }
-
-                if (File.Exists(smallPath))
-                {
-                    var smallBitmap = new BitmapImage();
-                    smallBitmap.BeginInit();
-                    smallBitmap.UriSource = new Uri(smallPath, UriKind.Absolute);
-                    smallBitmap.CacheOption = BitmapCacheOption.OnLoad;
-                    smallBitmap.EndInit();
-                    smallBitmap.Freeze();
-                    button.Image = smallBitmap;
-                }
-                else
-                {
-                    button.Image = CreateTextIcon(iconName.Replace('_', ' ').ToUpper(), fallbackColor, 16);
-                }
-
-                Trace.WriteLine($"[CombineCAD] Icon loaded: {iconName} (large={(button.LargeImage != null ? "OK" : "fallback")}, small={(button.Image != null ? "OK" : "fallback")})");
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[CombineCAD] Icon load failed '{iconName}': {ex.Message}. Using fallback.");
-                button.LargeImage = CreateTextIcon(iconName.Replace('_', ' ').ToUpper(), fallbackColor, 32);
-                button.Image = CreateTextIcon(iconName.Replace('_', ' ').ToUpper(), fallbackColor, 16);
-            }
-        }
-
-        private static BitmapImage CreateTextIcon(string text, Color bgColor, int size)
-        {
-            try
-            {
-                var brush = new SolidColorBrush(bgColor);
-                var visual = new DrawingVisual();
-                using (var dc = visual.RenderOpen())
-                {
-                    dc.DrawRectangle(brush, null, new Rect(0, 0, size, size));
-
-                    var typeface = new Typeface("Segoe UI");
-                    var fontSize = size <= 16 ? 6 : 12;
-                    var formatted = new FormattedText(
-                        text.Length > 4 ? text.Substring(0, 4) : text,
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        FlowDirection.LeftToRight,
-                        typeface,
-                        fontSize,
-                        Brushes.White,
-                        1.0);
-
-                    formatted.TextAlignment = TextAlignment.Center;
-                    double x = (size - formatted.Width) / 2;
-                    double y = (size - formatted.Height) / 2;
-                    dc.DrawText(formatted, new Point(x, y));
-                }
-
-                var renderBitmap = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
-                renderBitmap.Render(visual);
-
-                var bitmap = new BitmapImage();
-                using (var stream = new MemoryStream())
-                {
-                    PngBitmapEncoder encoder = new PngBitmapEncoder();
-                    encoder.Frames.Add(BitmapFrame.Create(renderBitmap));
-                    encoder.Save(stream);
-                    stream.Position = 0;
-
-                    bitmap.BeginInit();
-                    bitmap.StreamSource = stream;
-                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                    bitmap.EndInit();
-                    bitmap.Freeze();
-                }
-
-                return bitmap;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[CombineCAD] Fallback icon error: {ex.Message}");
-                return null;
-            }
         }
     }
 }

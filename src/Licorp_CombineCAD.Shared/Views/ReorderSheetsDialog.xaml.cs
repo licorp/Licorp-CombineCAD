@@ -28,7 +28,7 @@ namespace Licorp_CombineCAD.Views
                 _items.Add(new ReorderItem
                 {
                     Index = index++,
-                    IdValue = ViewSheetSetService.GetElementIdValue(sheet.ElementId),
+                    IdValue = RevitApiHelper.GetElementIdString(sheet.ElementId),
                     DisplayName = sheet.DisplayText
                 });
             }

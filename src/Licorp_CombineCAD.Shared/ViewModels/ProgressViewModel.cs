@@ -2,8 +2,6 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -24,9 +22,7 @@ namespace Licorp_CombineCAD.ViewModels
         private string _elapsedTime = "00:00:00";
         private readonly Action _onCancel;
         private readonly Stopwatch _stopwatch;
-        private CancellationTokenSource _timerCts;
-        private Task _timerTask;
-        private string _timeRemaining = "Calculating...";
+        private DispatcherTimer _timer;
 
         public ProgressViewModel(Action onCancel = null)
         {
@@ -37,60 +33,28 @@ namespace Licorp_CombineCAD.ViewModels
 
         public void StartTimer()
         {
+            StopTimer();
             _stopwatch.Restart();
-            _timerCts = new CancellationTokenSource();
-            _timerTask = Task.Run(async () =>
-            {
-                while (!_timerCts.Token.IsCancellationRequested)
-                {
-                    await Task.Delay(1000, _timerCts.Token);
-                    if (_timerCts.Token.IsCancellationRequested) break;
-                    
-                    var ts = _stopwatch.Elapsed;
-                    var timeStr = $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
-                    
-                    string remainingStr = "Calculating...";
-                    if (_percentage > 0)
-                    {
-                        var elapsedMs = _stopwatch.ElapsedMilliseconds;
-                        var totalEstimatedMs = elapsedMs / (_percentage / 100.0);
-                        var remainingMs = totalEstimatedMs - elapsedMs;
-                        if (remainingMs > 0)
-                        {
-                            var tsRemaining = TimeSpan.FromMilliseconds(remainingMs);
-                            remainingStr = $"{tsRemaining.Hours:D2}:{tsRemaining.Minutes:D2}:{tsRemaining.Seconds:D2}";
-                        }
-                        else
-                        {
-                            remainingStr = "00:00:00";
-                        }
-                    }
 
-                    Application.Current?.Dispatcher?.InvokeAsync(
-                        () => 
-                        {
-                            ElapsedTime = timeStr;
-                            TimeRemaining = remainingStr;
-                        },
-                        DispatcherPriority.Normal);
-                }
-            }, _timerCts.Token);
-            
-            UpdateElapsedTime();
+            _timer = new DispatcherTimer(DispatcherPriority.Normal, Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher)
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _timer.Tick += (s, e) =>
+            {
+                var ts = _stopwatch.Elapsed;
+                ElapsedTime = $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
+            };
+            _timer.Start();
         }
 
         public void StopTimer()
         {
+            _timer?.Stop();
+            _timer = null;
             _stopwatch.Stop();
-            _timerCts?.Cancel();
-            UpdateElapsedTime();
-            TimeRemaining = "00:00:00";
-        }
-
-        public string TimeRemaining
-        {
-            get => _timeRemaining;
-            set { _timeRemaining = value; OnPropertyChanged(); }
+            var ts = _stopwatch.Elapsed;
+            ElapsedTime = $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
         }
 
         public string Phase
@@ -98,6 +62,7 @@ namespace Licorp_CombineCAD.ViewModels
             get => _phase;
             set { _phase = value; OnPropertyChanged(); }
         }
+
         public string CurrentItem
         {
             get => _currentItem;
@@ -154,12 +119,6 @@ namespace Licorp_CombineCAD.ViewModels
             _onCancel?.Invoke();
         }
 
-        private void UpdateElapsedTime()
-        {
-            var ts = _stopwatch.Elapsed;
-            ElapsedTime = $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
-        }
-
         public void Update(string phase, string currentItem, int current, int total)
         {
             Phase = phase;
@@ -173,8 +132,6 @@ namespace Licorp_CombineCAD.ViewModels
         public void UpdatePhase(string phase)
         {
             Phase = phase;
-            Current = 0;
-            Total = 0;
         }
 
         private void UpdatePercentage()

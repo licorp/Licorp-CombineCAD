@@ -73,11 +73,6 @@ namespace Licorp_CombineCAD.ViewModels
                 : Path.Combine(OutputFolder, projectFolderName);
         }
 
-        private string BuildProjectFileBaseName()
-        {
-            return BuildProjectFolderName();
-        }
-
         private string BuildProjectFolderName()
         {
             var rawName = string.IsNullOrWhiteSpace(_projectName) ? "Project" : _projectName.Trim();

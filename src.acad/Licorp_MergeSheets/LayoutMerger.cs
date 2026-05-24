@@ -100,6 +100,7 @@ namespace Licorp_MergeSheets
             _cachedCanonicalMedia = null;
             _cachedMediaAt = DateTime.MinValue;
             _mediaSizeCache.Clear();
+            _correctedPaperCache.Clear();
         }
 
         private class ExtentsCacheEntry
@@ -1984,6 +1985,9 @@ namespace Licorp_MergeSheets
         // Cache for media sizes to avoid repeated SetCanonicalMediaName calls
         private static Dictionary<string, Tuple<double, double>> _mediaSizeCache = new Dictionary<string, Tuple<double, double>>(StringComparer.OrdinalIgnoreCase);
 
+        // Cache for corrected paper size results: key = "WxH", value = (mediaName, isRotated)
+        private static Dictionary<string, Tuple<string, bool>> _correctedPaperCache = new Dictionary<string, Tuple<string, bool>>(StringComparer.OrdinalIgnoreCase);
+
         private string SelectBestCanonicalMedia(
             PlotSettingsValidator psv,
             Layout layout,
@@ -2173,8 +2177,12 @@ namespace Licorp_MergeSheets
                     }
                 }
 
-                // FIX #1: Parse dimension-based strings like "42 x 30 mm" or "42x30"
-                // Revit often exports paper sizes as inches (e.g., "42 x 30 mm" actually means 42"x30" = Arch E1)
+                // Parse dimension-based strings like "42 x 30 mm", "42x30", "841 x 594 mm"
+                // Revit exports paper sizes using the title block's sheet size parameter which may be
+                // in inches (e.g. "42 x 30 mm" label on an Arch E1 title block = 42"x30" = 1066.8x762mm)
+                // or in mm (e.g. "841 x 594 mm" = A1).
+                // Heuristic: common Arch inch sizes are small integers (8-48); common ISO mm sizes are
+                // large integers (148-1682). Threshold: if both dims <= 60, treat as inches.
                 if (targetSize == null)
                 {
                     var dimensionMatch = System.Text.RegularExpressions.Regex.Match(
@@ -2184,11 +2192,19 @@ namespace Licorp_MergeSheets
                         double dim1 = double.Parse(dimensionMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
                         double dim2 = double.Parse(dimensionMatch.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
 
-                        // Heuristic: if both dimensions > 100, they're likely in inches
-                        // Common Arch sizes: 42x30, 36x24, 30x22, 24x18, 18x12
-                        bool isInches = dim1 > 100.0 && dim2 > 100.0 ||
-                            normalizedRevit.Contains("INCH") ||
-                            normalizedRevit.Contains("\"");
+                        // Explicit unit markers
+                        bool explicitInches = normalizedRevit.Contains("INCH") || normalizedRevit.Contains("\"");
+                        bool explicitMm = normalizedRevit.Contains(" MM") || normalizedRevit.EndsWith("MM");
+
+                        bool isInches;
+                        if (explicitInches)
+                            isInches = true;
+                        else if (explicitMm && (dim1 > 60.0 || dim2 > 60.0))
+                            isInches = false;  // large mm value explicitly labelled mm
+                        else if (dim1 <= 60.0 && dim2 <= 60.0)
+                            isInches = true;   // small dims with no unit = Arch inches (42x30, 36x24, etc.)
+                        else
+                            isInches = false;  // large dims = already mm (841x594, etc.)
 
                         if (isInches)
                         {
@@ -2197,7 +2213,6 @@ namespace Licorp_MergeSheets
                         }
                         else
                         {
-                            // Already in mm
                             targetSize = Tuple.Create(dim1, dim2);
                             AcadLogger.LogInfo($"[PaperSize] Parsed mm: {dim1}x{dim2}mm");
                         }
@@ -2298,6 +2313,18 @@ namespace Licorp_MergeSheets
         {
             try
             {
+                // Check cache first — same required size always yields same best media
+                string cacheKey = $"{requiredWidth:F0}x{requiredHeight:F0}";
+                if (_correctedPaperCache.TryGetValue(cacheKey, out var cached))
+                {
+                    psv.SetCanonicalMediaName(layout, cached.Item1);
+                    psv.SetPlotRotation(layout, cached.Item2 ? PlotRotation.Degrees090 : PlotRotation.Degrees000);
+                    AcadLogger.LogInfo(
+                        $"{phase}: Corrected paper size for '{layoutName}' => " +
+                        $"media='{cached.Item1}', rotated={cached.Item2} (from cache)");
+                    return;
+                }
+
                 var mediaNames = psv.GetCanonicalMediaNameList(layout);
                 string bestMatch = null;
                 double bestScore = double.MaxValue;
@@ -2308,46 +2335,50 @@ namespace Licorp_MergeSheets
                     if (string.IsNullOrWhiteSpace(mediaName))
                         continue;
 
-                    try
+                    // Use cache to avoid repeated SetCanonicalMediaName calls
+                    Tuple<double, double> sz;
+                    if (!_mediaSizeCache.TryGetValue(mediaName, out sz))
                     {
-                        psv.SetCanonicalMediaName(layout, mediaName);
-                        double mw = layout.PlotPaperSize.X;
-                        double mh = layout.PlotPaperSize.Y;
-
-                        if (mw < 1.0 || mh < 1.0)
-                            continue;
-
-                        double dNormal = Math.Abs(mw - requiredWidth) + Math.Abs(mh - requiredHeight);
-                        double dRotated = Math.Abs(mw - requiredHeight) + Math.Abs(mh - requiredWidth);
-
-                        if (dNormal <= dRotated && dNormal < bestScore)
+                        try
                         {
-                            bestScore = dNormal;
-                            bestMatch = mediaName;
-                            bestIsRotated = false;
+                            psv.SetCanonicalMediaName(layout, mediaName);
+                            double mw2 = layout.PlotPaperSize.X;
+                            double mh2 = layout.PlotPaperSize.Y;
+                            if (mw2 < 1.0 || mh2 < 1.0) continue;
+                            sz = Tuple.Create(mw2, mh2);
+                            _mediaSizeCache[mediaName] = sz;
                         }
-                        else if (dRotated < dNormal && dRotated < bestScore)
-                        {
-                            bestScore = dRotated;
-                            bestMatch = mediaName;
-                            bestIsRotated = true;
-                        }
+                        catch { continue; }
                     }
-                    catch { }
+
+                    double mw = sz.Item1;
+                    double mh = sz.Item2;
+                    double dNormal = Math.Abs(mw - requiredWidth) + Math.Abs(mh - requiredHeight);
+                    double dRotated = Math.Abs(mw - requiredHeight) + Math.Abs(mh - requiredWidth);
+
+                    if (dNormal <= dRotated && dNormal < bestScore)
+                    {
+                        bestScore = dNormal;
+                        bestMatch = mediaName;
+                        bestIsRotated = false;
+                    }
+                    else if (dRotated < dNormal && dRotated < bestScore)
+                    {
+                        bestScore = dRotated;
+                        bestMatch = mediaName;
+                        bestIsRotated = true;
+                    }
+
+                    // Early exit if exact match found
+                    if (bestScore <= 2.0)
+                        break;
                 }
 
                 if (bestMatch != null)
                 {
+                    _correctedPaperCache[cacheKey] = Tuple.Create(bestMatch, bestIsRotated);
                     psv.SetCanonicalMediaName(layout, bestMatch);
-                    if (bestIsRotated)
-                    {
-                        psv.SetPlotRotation(layout, PlotRotation.Degrees090);
-                    }
-                    else
-                    {
-                        psv.SetPlotRotation(layout, PlotRotation.Degrees000);
-                    }
-
+                    psv.SetPlotRotation(layout, bestIsRotated ? PlotRotation.Degrees090 : PlotRotation.Degrees000);
                     AcadLogger.LogInfo(
                         $"{phase}: Corrected paper size for '{layoutName}' => " +
                         $"media='{bestMatch}', paper=({layout.PlotPaperSize.X:F0}x{layout.PlotPaperSize.Y:F0}), " +

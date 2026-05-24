@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -43,7 +42,7 @@ namespace Licorp_CombineCAD.Commands
         {
             try
             {
-                Logger.LogSection("LayerManager Command");
+                Logger.LogInfo("LayerManager Command");
                 var uiDoc = commandData.Application.ActiveUIDocument;
                 if (uiDoc == null)
                 {
@@ -58,7 +57,7 @@ namespace Licorp_CombineCAD.Commands
             catch (Exception ex)
             {
                 message = ex.Message;
-                Logger.LogException(ex, "LayerManager");
+                Logger.LogError($"LayerManager: {ex.Message}");
                 return Result.Failed;
             }
         }
@@ -70,14 +69,7 @@ namespace Licorp_CombineCAD.Commands
         {
             try
             {
-                // TEMPORARY BYPASS: License system not ready yet.
-                // TODO: Revert to LicenseAuthService when license system is complete.
-                Logger.LogInfo("[LICENSE] TEMPORARY BYPASS - license system not ready, skipping check.");
-                var license = new LicenseCheckResult { State = LicenseState.Licensed, Message = "Licensed (temporary bypass)" };
-
-                Logger.LogSection($"Export Command: {mode}");
-                Logger.LogInfo($"User: {Environment.UserName}");
-                Logger.LogInfo($"Machine: {Environment.MachineName}");
+                Logger.LogInfo($"Export Command: {mode}");
 
                 var uiDoc = commandData.Application.ActiveUIDocument;
                 if (uiDoc == null)
@@ -87,15 +79,10 @@ namespace Licorp_CombineCAD.Commands
                 }
 
                 var doc = uiDoc.Document;
-                Logger.LogInfo($"Document: {doc.Title}");
-                Logger.LogInfo($"Worksharing: {doc.IsWorkshared}");
-
-                var collector = new FilteredElementCollector(doc)
-                .OfClass(typeof(ViewSheet))
-                .WhereElementIsNotElementType();
-
-                int sheetCount = collector.GetElementCount();
-                Logger.LogInfo($"Found {sheetCount} sheets");
+                var sheetCount = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSheet))
+                    .WhereElementIsNotElementType()
+                    .GetElementCount();
 
                 if (sheetCount == 0)
                 {
@@ -104,7 +91,6 @@ namespace Licorp_CombineCAD.Commands
                 }
 
                 var dialog = new ExportDialog(uiDoc, mode);
-                dialog.SetLicenseBanner(license.State, license.Message);
                 dialog.Show();
 
                 return Result.Succeeded;
@@ -112,7 +98,7 @@ namespace Licorp_CombineCAD.Commands
             catch (Exception ex)
             {
                 message = ex.Message;
-                Logger.LogException(ex, "ExportCommand");
+                Logger.LogError($"ExportCommand: {ex.Message}");
                 return Result.Failed;
             }
         }

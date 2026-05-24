@@ -6,11 +6,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Text;
 using Licorp_CombineCAD.Models;
 using Licorp_CombineCAD.Services;
 using Licorp_CombineCAD.Views;
-
 namespace Licorp_CombineCAD.ViewModels
 {
     public partial class ExportDialogViewModel
@@ -93,6 +91,7 @@ namespace Licorp_CombineCAD.ViewModels
             if (!Directory.Exists(settings.OutputFolder))
                 Directory.CreateDirectory(settings.OutputFolder);
 
+            // --- Preflight (ExternalEvent raise #1) ---
             SheetPreflightResult preflightResult;
             try
             {
@@ -105,11 +104,8 @@ namespace Licorp_CombineCAD.ViewModels
             catch (Exception ex)
             {
                 Trace.WriteLine("[Preflight] Failed: " + ex);
-                MessageBox.Show(
-                    "Preflight check failed:\n" + ex.Message,
-                    "Preflight Failed",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                MessageBox.Show("Preflight check failed:\n" + ex.Message,
+                    "Preflight Failed", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
@@ -120,29 +116,39 @@ namespace Licorp_CombineCAD.ViewModels
             _cancellationTokenSource = new CancellationTokenSource();
 
             ProgressVm = new ProgressViewModel(() => _cancellationTokenSource?.Cancel());
-            
-            // Update UI immediately
             ProgressVm.Update("Preparing", "Initializing export...", 0, selectedSheets.Count * 2);
             ProgressVm.StartTimer();
-            
-            // Force UI update
-            await Application.Current.Dispatcher.BeginInvoke(new Action(() => { }));
+
+            // Force UI update before handing control to Revit thread.
+            await _uiDispatcher.BeginInvoke(new Action(() => { }));
 
             try
             {
-                var options = _exportService.BuildExportOptions(settings);
+                Trace.WriteLine($"[ExportInit] Begin ExecuteExportAsync | selectedSheets={selectedSheets.Count} | setup='{settings.DwgExportSetupName}' | mode={settings.ExportMode}");
+
+                // BuildExportOptions touches ExportDWGSettings (Revit API) — must run on Revit thread.
+                // However, calling it here on the UI thread before the export raise avoids needing
+                // a separate ExternalEvent raise, matching the reference implementation pattern.
+                // NOTE: BuildExportOptions only reads settings, no transaction needed.
+                ProgressVm.Update("Preparing", "Building DWG export options...", 1, selectedSheets.Count * 2);
+                var options = await _revitThreadService.RunOnRevitThreadAsync(app =>
+                    _exportService.BuildExportOptions(settings));
+
+                if (options == null)
+                    throw new InvalidOperationException("Failed to build DWG export options.");
+
                 var cts = _cancellationTokenSource;
                 var progressVm = ProgressVm;
                 var totalSheets = selectedSheets.Count;
 
+                // --- Export (ExternalEvent raise #2) ---
+                ProgressVm.Update("Preparing", "Starting Revit export engine...", 2, selectedSheets.Count * 2);
                 ExportResult exportResult = await _revitThreadService.RunOnRevitThreadAsync(app =>
                 {
                     var progress = new DirectProgress<ExportProgressInfo>(info =>
                     {
-                        Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-                        {
-                            progressVm.Update(info.Phase, info.CurrentItem, info.Current, totalSheets * 2);
-                        }));
+                        _uiDispatcher.BeginInvoke(new Action(() =>
+                            progressVm.Update(info.Phase, info.CurrentItem, info.Current, totalSheets * 2)));
                     });
 
                     return _exportService.ExportSheetsIndividually(
@@ -150,6 +156,7 @@ namespace Licorp_CombineCAD.ViewModels
                         progress,
                         cts.Token);
                 });
+                Trace.WriteLine("[ExportInit] Export complete");
 
                 var exportedFiles = exportResult?.ExportedFiles ?? new List<string>();
 
@@ -183,7 +190,7 @@ namespace Licorp_CombineCAD.ViewModels
                     if (exportResult.SkippedSheets.Count > 0)
                         warningMsg += "\n\nSkipped: " + string.Join(", ", exportResult.SkippedSheets);
 
-                    await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    await _uiDispatcher.BeginInvoke(new Action(() =>
                     {
                         MessageBox.Show(warningMsg, "Export Warnings", MessageBoxButton.OK, MessageBoxImage.Warning);
                     }));
@@ -213,10 +220,6 @@ namespace Licorp_CombineCAD.ViewModels
                         mergeService.SetExpectedSheetCount(exportedFiles.Count);
                         mergeService.SetMergeLayers(settings.MergeLayers);
                         mergeService.SetSheetSortMode(settings.SortMode.ToString());
-                        mergeService.SetReverseSortOrder(settings.ReverseSortOrder);
-                        mergeService.SetModelSpaceArrangement(settings.ModelSpaceArrangement.ToString());
-                        mergeService.SetGridColumns(settings.GridColumns);
-                        mergeService.SetCustomSpacing(settings.CustomSpacing);
 
                         var exportedSheets = exportResult?.ExportedSheets ?? new List<SheetInfo>();
                         // Apply LayoutNameTemplate with {SheetNumber}, {SheetName}, {PaperSize} placeholders
@@ -243,7 +246,7 @@ namespace Licorp_CombineCAD.ViewModels
 
                         var mergeProgress = new DirectProgress<MergeProgressInfo>(info =>
                         {
-                            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                            _uiDispatcher.BeginInvoke(new Action(() =>
                             {
                                 progressVm.Update(info.Phase, info.CurrentItem, totalSheets + info.Current, totalSheets * 2);
                             }));
@@ -251,10 +254,6 @@ namespace Licorp_CombineCAD.ViewModels
 
                         switch (ExportMode)
                         {
-                            case ExportMode.OneToOneScale:
-                            case ExportMode.SheetRatioScale:
-                                // OneToOneScale and SheetRatioScale use same merge as MultiLayout
-                                // The scaling was already applied during export via SmartScaleService
                             case ExportMode.MultiLayout:
                                 mergeSuccess = await mergeService.MergeToMultiLayoutAsync(exportedFiles, outputPath, layoutNames, paperSizes, mergeProgress, cts.Token);
                                 break;
@@ -277,10 +276,10 @@ namespace Licorp_CombineCAD.ViewModels
                                 : string.Format("Merged {0} files to {1}", exportedFiles.Count, Path.GetFileName(outputPath));
 
                             var finalOutputPath = outputPath;
-                            if (!IsLikelyValidCombinedDwg(finalOutputPath, out var validateReason))
+                            if (!DwgMergeService.IsLikelyValidCombinedDwg(finalOutputPath, out var validateReason))
                             {
                                 var logPath = mergeService.LastLogPath;
-                                await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                                await _uiDispatcher.BeginInvoke(new Action(() =>
                                 {
                                     MessageBox.Show(
                                         "AutoCAD reported success but the output file still looks invalid.\n\n"
@@ -303,7 +302,7 @@ namespace Licorp_CombineCAD.ViewModels
                                 ? "See merge log for details."
                                 : mergeService.LastError;
 
-                            await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                            await _uiDispatcher.BeginInvoke(new Action(() =>
                             {
                                 MessageBox.Show(
                                     detail + (string.IsNullOrWhiteSpace(logPath) ? "" : "\n\nLog: " + logPath),
@@ -330,7 +329,7 @@ namespace Licorp_CombineCAD.ViewModels
                         failedCount,
                         skippedCount);
 
-                    await Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    await _uiDispatcher.BeginInvoke(new Action(() =>
                     {
                         MessageBox.Show(
                             "No sheet was exported successfully, so merge was skipped.\n\n"
@@ -354,10 +353,27 @@ namespace Licorp_CombineCAD.ViewModels
                 StatusMessage = "Export cancelled.";
                 Trace.WriteLine("[Export] Cancelled by user");
             }
+            catch (TimeoutException tex)
+            {
+                StatusMessage = "Error: Revit export timed out. Please try again.";
+                Trace.WriteLine("[Export] Timeout: " + tex);
+                var errorLog = Path.Combine(Path.GetTempPath(), "Licorp_ExportErrors.log");
+                File.AppendAllText(errorLog, DateTime.Now.ToString("s") + " Timeout: " + tex + Environment.NewLine);
+                await _uiDispatcher.BeginInvoke(new Action(() =>
+                {
+                    MessageBox.Show(
+                        "The export operation timed out. This can happen if Revit is busy.\n\nPlease try again or restart Revit.",
+                        "Export Timeout",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }));
+            }
             catch (Exception ex)
             {
                 StatusMessage = "Error: " + ex.Message;
                 Trace.WriteLine("[Export] Error: " + ex);
+                var errorLog = Path.Combine(Path.GetTempPath(), "Licorp_ExportErrors.log");
+                File.AppendAllText(errorLog, DateTime.Now.ToString("s") + " Error: " + ex + Environment.NewLine);
             }
             finally
             {
@@ -377,7 +393,7 @@ namespace Licorp_CombineCAD.ViewModels
 
         private string GetUniqueOutputPath()
         {
-            var baseName = BuildProjectFileBaseName();
+            var baseName = BuildProjectFolderName();
             var path = Path.Combine(GetResolvedOutputFolder(), baseName + ".dwg");
 
             var counter = 1;
@@ -453,58 +469,6 @@ namespace Licorp_CombineCAD.ViewModels
             return true;
         }
 
-        private bool IsLikelyValidCombinedDwg(string path, out string reason)
-        {
-            reason = null;
-
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                reason = "Output path is empty.";
-                return false;
-            }
-
-            if (!File.Exists(path))
-            {
-                reason = "Output file does not exist.";
-                return false;
-            }
-
-            var fi = new FileInfo(path);
-            if (fi.Length < 4096)
-            {
-                reason = $"Output file too small: {fi.Length} bytes.";
-                return false;
-            }
-
-            try
-            {
-                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                {
-                    var header = new byte[6];
-                    var read = fs.Read(header, 0, header.Length);
-                    if (read < 6)
-                    {
-                        reason = "Cannot read DWG header.";
-                        return false;
-                    }
-
-                    var signature = Encoding.ASCII.GetString(header);
-                    if (!signature.StartsWith("AC", StringComparison.Ordinal))
-                    {
-                        reason = $"Unexpected DWG signature: {signature}";
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                reason = ex.Message;
-                return false;
-            }
-        }
-
         private string BuildPreflightMessage(SheetPreflightResult result)
         {
             var lines = new List<string> { result.Summary, "" };
@@ -549,17 +513,13 @@ namespace Licorp_CombineCAD.ViewModels
                 DwgVersion = SelectedDwgVersion,
                 SmartViewScale = SmartViewScale,
                 OpenAfterExport = OpenAfterExport,
-                ProgressAlwaysOnTop = ProgressAlwaysOnTop,
                 OrderRuleSource = SelectedSortMode,
                 SelectedSheetScheduleId = SelectedSheetSchedule?.ElementIdValue ?? "",
                 VerticalAlign = verticalAlign,
                 SortMode = sortMode,
                 PreserveCoincidentLines = PreserveCoincidentLines,
                 MergeLayers = MergeLayers,
-                ModelSpaceArrangement = ModelSpaceArrangement,
-                GridColumns = GridColumns,
-                CustomSpacing = CustomSpacing,
-                ReverseSortOrder = ReverseSortOrder
+                LayoutNameTemplate = LayoutNameTemplate
             };
         }
 

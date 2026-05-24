@@ -31,6 +31,7 @@ namespace Licorp_CombineCAD.ViewModels
         private readonly ViewSheetSetService _viewSheetSetService;
         private readonly ProfileService _profileService;
         private readonly RevitThreadService _revitThreadService;
+        private readonly System.Windows.Threading.Dispatcher _uiDispatcher;
 
         private ExportProfile _profile;
         private ExportProfile _selectedProfile;
@@ -49,14 +50,12 @@ namespace Licorp_CombineCAD.ViewModels
         private string _selectedVerticalAlignment = "Top";
         private string _fileNameTemplate = "{SheetNumber} - {SheetName}";
         private string _statusMessage = "";
-        private string _licenseStateText = "Licensed";
         private string _projectName = "Project";
         private string _projectNumber = "PRJ-001";
         private ExportMode _exportMode = ExportMode.MultiLayout;
         private string _layoutNameTemplate = "{SheetNumber} - {SheetName}";
         private bool _smartViewScale;
         private bool _openAfterExport;
-        private bool _progressAlwaysOnTop = true;
         private bool _preserveCoincidentLines;
         private bool _mergeLayers = true;
         private int _selectedCount;
@@ -74,6 +73,7 @@ namespace Licorp_CombineCAD.ViewModels
         {
             _uiDocument = uiDocument ?? throw new ArgumentNullException(nameof(uiDocument));
             _document = uiDocument.Document;
+            _uiDispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
 
             _sheetCollector = new SheetCollectorService(_document);
             _exportService = new DwgExportService(_document);
@@ -189,12 +189,6 @@ namespace Licorp_CombineCAD.ViewModels
             set { _openAfterExport = value; OnPropertyChanged(); }
         }
 
-        public bool ProgressAlwaysOnTop
-        {
-            get => _progressAlwaysOnTop;
-            set { _progressAlwaysOnTop = value; OnPropertyChanged(); }
-        }
-
         public bool IsExporting
         {
             get => _isExporting;
@@ -236,12 +230,6 @@ namespace Licorp_CombineCAD.ViewModels
         {
             get => _statusMessage;
             set { _statusMessage = value; OnPropertyChanged(); }
-        }
-
-        public string LicenseStateText
-        {
-            get => _licenseStateText;
-            set { _licenseStateText = value; OnPropertyChanged(); }
         }
 
         public bool IsAutoCADAvailable { get; private set; }
@@ -305,59 +293,6 @@ namespace Licorp_CombineCAD.ViewModels
             set { _selectedVerticalAlignment = value; OnPropertyChanged(); RefreshDerivedState(); }
         }
 
-        private string _modelSpaceArrangement = "Horizontal";
-        private int _gridColumns = 3;
-        private double _customSpacing = 50.0;
-        private bool _reverseSortOrder = false;
-
-        public string ModelSpaceArrangement
-        {
-            get => _modelSpaceArrangement;
-            set
-            {
-                _modelSpaceArrangement = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(IsGridArrangement));
-                RefreshDerivedState();
-            }
-        }
-
-        public bool IsGridArrangement => string.Equals(_modelSpaceArrangement, "Grid", StringComparison.OrdinalIgnoreCase);
-
-        public int GridColumns
-        {
-            get => _gridColumns;
-            set
-            {
-                _gridColumns = Math.Max(1, value);
-                OnPropertyChanged();
-                RefreshDerivedState();
-            }
-        }
-
-        public double CustomSpacing
-        {
-            get => _customSpacing;
-            set
-            {
-                _customSpacing = Math.Max(0, value);
-                OnPropertyChanged();
-                RefreshDerivedState();
-            }
-        }
-
-        public bool ReverseSortOrder
-        {
-            get => _reverseSortOrder;
-            set
-            {
-                _reverseSortOrder = value;
-                OnPropertyChanged();
-                ApplySort();
-                RefreshFilterState();
-            }
-        }
-
         public string FileNameTemplate
         {
             get => _fileNameTemplate;
@@ -365,6 +300,12 @@ namespace Licorp_CombineCAD.ViewModels
         }
 
         public string FileNamePreview => BuildFileNamePreview();
+
+        public string LayoutNameTemplate
+        {
+            get => _layoutNameTemplate;
+            set { _layoutNameTemplate = value; OnPropertyChanged(); }
+        }
 
         public bool PreserveCoincidentLines
         {
@@ -399,7 +340,7 @@ namespace Licorp_CombineCAD.ViewModels
 
         public string CombinedFilePreview => string.IsNullOrWhiteSpace(OutputFolder)
             ? "Choose output folder"
-            : Path.Combine(ResolvedOutputFolder, BuildProjectFileBaseName() + ".dwg");
+            : Path.Combine(ResolvedOutputFolder, BuildProjectFolderName() + ".dwg");
 
         public string ResolvedOutputFolder => GetResolvedOutputFolder();
         public string OutputFolderHint => string.IsNullOrWhiteSpace(OutputFolder)
@@ -429,14 +370,6 @@ namespace Licorp_CombineCAD.ViewModels
             try { _revitThreadService?.Dispose(); } catch { }
         }
 
-        internal void SetLicenseState(string stateText, string detail)
-        {
-            LicenseStateText = string.IsNullOrWhiteSpace(stateText) ? "Licensed" : stateText;
-            if (!string.IsNullOrWhiteSpace(detail))
-            {
-                StatusMessage = detail;
-            }
-        }
     }
 
     public class RelayCommand : ICommand

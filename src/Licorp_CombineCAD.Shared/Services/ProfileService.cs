@@ -246,15 +246,10 @@ namespace Licorp_CombineCAD.Services
         public string DwgVersion { get; set; } = "2018";
         public bool SmartViewScale { get; set; } = false;
         public bool OpenAfterExport { get; set; } = false;
-        public bool ProgressAlwaysOnTop { get; set; } = true;
         public bool PreserveCoincidentLines { get; set; } = false;
         public string SortMode { get; set; } = "Sheet Number";
         public string SelectedSheetScheduleId { get; set; } = "";
         public string VerticalAlign { get; set; } = "Top";
-        public string ModelSpaceArrangement { get; set; } = "Horizontal";
-        public int GridColumns { get; set; } = 3;
-        public double CustomSpacing { get; set; } = 50.0;
-        public bool ReverseSortOrder { get; set; } = false;
         public DateTime LastUsed { get; set; } = DateTime.Now;
     }
 }

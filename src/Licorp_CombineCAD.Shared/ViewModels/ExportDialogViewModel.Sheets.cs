@@ -153,7 +153,7 @@ namespace Licorp_CombineCAD.ViewModels
                     selectedSets.SelectMany(s => s.SheetIdValues),
                     StringComparer.OrdinalIgnoreCase);
 
-                query = query.Where(s => allowedIds.Contains(ViewSheetSetService.GetElementIdValue(s.ElementId)));
+                query = query.Where(s => allowedIds.Contains(RevitApiHelper.GetElementIdString(s.ElementId)));
             }
 
             if (!string.IsNullOrWhiteSpace(FilterText))
@@ -301,7 +301,7 @@ namespace Licorp_CombineCAD.ViewModels
                 return;
 
             var selectedById = selected.ToDictionary(
-                s => ViewSheetSetService.GetElementIdValue(s.ElementId),
+                s => RevitApiHelper.GetElementIdString(s.ElementId),
                 s => s,
                 StringComparer.OrdinalIgnoreCase);
 

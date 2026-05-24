@@ -66,8 +66,8 @@ namespace Licorp_CombineCAD.Services
                 return;
 
             var timer = Stopwatch.StartNew();
-            var requestedIds = new HashSet<string>(
-                sheets.Select(s => GetElementIdValue(s.ElementId)).Where(id => !string.IsNullOrWhiteSpace(id)),
+                var requestedIds = new HashSet<string>(
+                sheets.Select(s => RevitApiHelper.GetElementIdString(s.ElementId)).Where(id => !string.IsNullOrWhiteSpace(id)),
                 StringComparer.OrdinalIgnoreCase);
             var titleBlocksBySheetId = GetTitleBlocksBySheetId(requestedIds);
 
@@ -81,7 +81,7 @@ namespace Licorp_CombineCAD.Services
                 sheet.SheetName = viewSheet.Name ?? sheet.SheetName ?? "";
                 if (string.IsNullOrWhiteSpace(sheet.PaperSize))
                 {
-                    titleBlocksBySheetId.TryGetValue(GetElementIdValue(viewSheet.Id), out var titleBlock);
+                    titleBlocksBySheetId.TryGetValue(RevitApiHelper.GetElementIdString(viewSheet.Id), out var titleBlock);
                     ApplyPaperSize(sheet, titleBlock);
                 }
 

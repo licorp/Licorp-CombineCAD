@@ -32,7 +32,7 @@ namespace Licorp_CombineCAD.Services
                 {
                     result.Add(new SheetScheduleInfo
                     {
-                        ElementIdValue = GetElementIdValue(schedule.Id).ToString(),
+                        ElementIdValue = RevitApiHelper.GetElementIdString(schedule.Id),
                         Name = schedule.Name
                     });
                 }
@@ -116,7 +116,7 @@ namespace Licorp_CombineCAD.Services
             if (!long.TryParse(scheduleIdValue, out var idValue))
                 return null;
 
-            var elementId = CreateElementId(idValue);
+            var elementId = RevitApiHelper.CreateElementId(idValue);
             return elementId == null ? null : _document.GetElement(elementId) as ViewSchedule;
         }
 
@@ -131,53 +131,12 @@ namespace Licorp_CombineCAD.Services
                 if (definition == null)
                     return false;
 
-                return GetElementIdValue(definition.CategoryId) == (long)BuiltInCategory.OST_Sheets;
+                return RevitApiHelper.GetElementIdLong(definition.CategoryId) == (long)BuiltInCategory.OST_Sheets;
             }
             catch
             {
                 return false;
             }
-        }
-
-        private static long GetElementIdValue(ElementId id)
-        {
-            if (id == null)
-                return 0;
-
-            try
-            {
-                var valueProperty = typeof(ElementId).GetProperty("Value");
-                if (valueProperty != null)
-                    return Convert.ToInt64(valueProperty.GetValue(id, null));
-
-                var integerValueProperty = typeof(ElementId).GetProperty("IntegerValue");
-                if (integerValueProperty != null)
-                    return Convert.ToInt64(integerValueProperty.GetValue(id, null));
-            }
-            catch
-            {
-            }
-
-            return 0;
-        }
-
-        private static ElementId CreateElementId(long value)
-        {
-            try
-            {
-                var longCtor = typeof(ElementId).GetConstructor(new[] { typeof(long) });
-                if (longCtor != null)
-                    return (ElementId)longCtor.Invoke(new object[] { value });
-
-                var intCtor = typeof(ElementId).GetConstructor(new[] { typeof(int) });
-                if (intCtor != null)
-                    return (ElementId)intCtor.Invoke(new object[] { Convert.ToInt32(value) });
-            }
-            catch
-            {
-            }
-
-            return null;
         }
     }
 }

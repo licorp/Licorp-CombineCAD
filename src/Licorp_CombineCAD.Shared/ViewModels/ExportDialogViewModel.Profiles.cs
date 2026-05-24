@@ -101,15 +101,10 @@ namespace Licorp_CombineCAD.ViewModels
             profile.FileNameTemplate = FileNameTemplate;
             profile.SmartViewScale = SmartViewScale;
             profile.OpenAfterExport = OpenAfterExport;
-            profile.ProgressAlwaysOnTop = ProgressAlwaysOnTop;
             profile.PreserveCoincidentLines = PreserveCoincidentLines;
             profile.SortMode = SelectedSortMode;
             profile.SelectedSheetScheduleId = SelectedSheetSchedule?.ElementIdValue ?? "";
             profile.VerticalAlign = SelectedVerticalAlignment;
-            profile.ModelSpaceArrangement = ModelSpaceArrangement;
-            profile.GridColumns = GridColumns;
-            profile.CustomSpacing = CustomSpacing;
-            profile.ReverseSortOrder = ReverseSortOrder;
             profile.LastUsed = DateTime.Now;
         }
 
@@ -132,7 +127,6 @@ namespace Licorp_CombineCAD.ViewModels
 
             SmartViewScale = profile.SmartViewScale;
             OpenAfterExport = profile.OpenAfterExport;
-            ProgressAlwaysOnTop = profile.ProgressAlwaysOnTop;
             PreserveCoincidentLines = profile.PreserveCoincidentLines;
 
             if (!string.IsNullOrEmpty(profile.SortMode) && AvailableSortModes.Contains(profile.SortMode))
@@ -140,17 +134,6 @@ namespace Licorp_CombineCAD.ViewModels
 
             if (!string.IsNullOrEmpty(profile.VerticalAlign) && AvailableVerticalAlignments.Contains(profile.VerticalAlign))
                 SelectedVerticalAlignment = profile.VerticalAlign;
-
-            if (!string.IsNullOrEmpty(profile.ModelSpaceArrangement))
-                ModelSpaceArrangement = profile.ModelSpaceArrangement;
-
-            if (profile.GridColumns > 0)
-                GridColumns = profile.GridColumns;
-
-            if (profile.CustomSpacing > 0)
-                CustomSpacing = profile.CustomSpacing;
-
-            ReverseSortOrder = profile.ReverseSortOrder;
 
             ApplySavedScheduleSelection();
             RefreshDerivedState();

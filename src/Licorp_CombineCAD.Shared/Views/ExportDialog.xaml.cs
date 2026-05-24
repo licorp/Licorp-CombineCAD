@@ -11,7 +11,6 @@ namespace Licorp_CombineCAD.Views
     public partial class ExportDialog : Window
     {
         private bool _isDragging;
-        private bool _isBulkUpdatingCheckboxes;
         private Point _dragStartPoint;
         private SheetItemViewModel _dragSourceItem;
 
@@ -23,26 +22,6 @@ namespace Licorp_CombineCAD.Views
             DataContext = viewModel;
             Loaded += ExportDialog_Loaded;
             Closing += ExportDialog_Closing;
-        }
-
-        internal void SetLicenseBanner(Services.LicenseState state, string detail)
-        {
-            if (DataContext is ExportDialogViewModel vm)
-            {
-                vm.SetLicenseState(MapStateText(state), detail);
-            }
-        }
-
-        private static string MapStateText(Services.LicenseState state)
-        {
-            switch (state)
-            {
-                case Services.LicenseState.GraceMode: return "Grace mode";
-                case Services.LicenseState.Expired: return "Expired";
-                case Services.LicenseState.Revoked: return "Revoked";
-                case Services.LicenseState.Unlicensed: return "Unlicensed";
-                default: return "Licensed";
-            }
         }
 
         private async void ExportDialog_Loaded(object sender, RoutedEventArgs e)
@@ -116,18 +95,13 @@ namespace Licorp_CombineCAD.Views
             if (targetItem == null || targetItem == droppedItem) return;
 
             if (DataContext is ExportDialogViewModel vm)
-            {
                 vm.ReorderSheet(droppedItem, targetItem);
-            }
 
             e.Handled = true;
         }
 
         private void SheetSelectionCheckBox_Click(object sender, RoutedEventArgs e)
         {
-            if (_isBulkUpdatingCheckboxes)
-                return;
-
             var checkbox = sender as CheckBox;
             var clickedSheet = checkbox?.DataContext as SheetItemViewModel;
             if (checkbox == null || clickedSheet == null || SheetDataGrid?.SelectedItems == null)
@@ -136,26 +110,16 @@ namespace Licorp_CombineCAD.Views
             if (SheetDataGrid.SelectedItems.Count <= 1 || !SheetDataGrid.SelectedItems.Contains(clickedSheet))
                 return;
 
-            _isBulkUpdatingCheckboxes = true;
-            try
-            {
-                var newState = checkbox.IsChecked == true;
-                foreach (var item in SheetDataGrid.SelectedItems.OfType<SheetItemViewModel>())
-                    item.IsSelected = newState;
-            }
-            finally
-            {
-                _isBulkUpdatingCheckboxes = false;
-            }
+            var newState = checkbox.IsChecked == true;
+            foreach (var item in SheetDataGrid.SelectedItems.OfType<SheetItemViewModel>())
+                item.IsSelected = newState;
         }
 
         private DataGridRow GetDataGridRow(DataGrid grid, MouseButtonEventArgs e)
         {
             var element = grid.InputHitTest(e.GetPosition(grid)) as System.Windows.Media.Visual;
             while (element != null && !(element is DataGridRow))
-            {
                 element = System.Windows.Media.VisualTreeHelper.GetParent(element) as System.Windows.Media.Visual;
-            }
             return element as DataGridRow;
         }
 
@@ -163,9 +127,7 @@ namespace Licorp_CombineCAD.Views
         {
             var element = grid.InputHitTest(point) as System.Windows.Media.Visual;
             while (element != null && !(element is DataGridRow))
-            {
                 element = System.Windows.Media.VisualTreeHelper.GetParent(element) as System.Windows.Media.Visual;
-            }
             return element as DataGridRow;
         }
     }

@@ -1,9 +1,9 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
-using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 
 namespace Licorp_CombineCAD.Services
@@ -26,16 +26,14 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
-        public string GetName()
-        {
-            return Name;
-        }
+        public string GetName() => Name;
     }
 
     public class RevitThreadService
     {
-        private ExternalEvent _externalEvent;
-        private ExportEventHandler _handler;
+        private readonly ExternalEvent _externalEvent;
+        private readonly ExportEventHandler _handler;
+        private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
         public RevitThreadService()
         {
@@ -47,36 +45,53 @@ namespace Licorp_CombineCAD.Services
         {
             _handler.ExecuteAction = action;
             _externalEvent.Raise();
-            Trace.WriteLine("[RevitThread] Raised external event");
         }
 
-        public Task<T> RunOnRevitThreadAsync<T>(Func<UIApplication, T> action)
+        public async Task<T> RunOnRevitThreadAsync<T>(Func<UIApplication, T> action, TimeSpan? timeout = null)
         {
-            var tcs = new TaskCompletionSource<T>();
-            _handler.ExecuteAction = (app) =>
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            await _semaphore.WaitAsync().ConfigureAwait(false);
+            try
             {
-                try
+                _handler.ExecuteAction = app =>
                 {
-                    var result = action(app);
-                    tcs.SetResult(result);
-                }
-                catch (Exception ex)
-                {
-                    tcs.SetException(ex);
-                }
-            };
-            _externalEvent.Raise();
-            Trace.WriteLine("[RevitThread] Raised external event (async with result)");
-            return tcs.Task;
+                    try
+                    {
+                        tcs.SetResult(action(app));
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.SetException(ex);
+                    }
+                };
+                _externalEvent.Raise();
+                Trace.WriteLine("[RevitThread] External event raised");
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+
+            // Await without capturing the UI SynchronizationContext so the UI thread
+            // stays free to process Revit's ExternalEvent dispatch on all versions.
+            if (timeout.HasValue)
+            {
+                var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeout.Value)).ConfigureAwait(false);
+                if (completed != tcs.Task)
+                    throw new TimeoutException($"Revit thread operation timed out after {timeout.Value.TotalSeconds}s.");
+            }
+
+            return await tcs.Task.ConfigureAwait(false);
         }
 
-        public Task RunOnRevitThreadAsync(Action<UIApplication> action)
+        public Task RunOnRevitThreadAsync(Action<UIApplication> action, TimeSpan? timeout = null)
         {
             return RunOnRevitThreadAsync<object>(app =>
             {
                 action(app);
                 return null;
-            });
+            }, timeout);
         }
 
         public T ExecuteOnMainThread<T>(Func<T> action)
@@ -119,6 +134,7 @@ namespace Licorp_CombineCAD.Services
         public void Dispose()
         {
             try { _externalEvent?.Dispose(); } catch { }
+            _semaphore?.Dispose();
         }
     }
 }

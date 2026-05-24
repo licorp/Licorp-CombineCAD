@@ -144,12 +144,7 @@ namespace Licorp.Diagnostics
         {
             try
             {
-                // Trace.WriteLine works in BOTH Debug and Release builds
-                // This is what RevitAddInManager DockPanel captures
                 Trace.WriteLine(line);
-
-                // Also write to Debug output (visible in Visual Studio Output window)
-                Debug.WriteLine(line);
             }
             catch { }
 

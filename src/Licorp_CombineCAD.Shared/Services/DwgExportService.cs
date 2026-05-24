@@ -4,11 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using Autodesk.Revit.DB;
-using Licorp_CombineCAD.Helpers;
 using Licorp_CombineCAD.Models;
 
 namespace Licorp_CombineCAD.Services
@@ -16,7 +14,6 @@ namespace Licorp_CombineCAD.Services
     public class DwgExportService
     {
         private readonly Document _document;
-        private List<ElementId> _unloadedLinkIds;
 
         public DwgExportService(Document document)
         {
@@ -63,9 +60,7 @@ namespace Licorp_CombineCAD.Services
                         .FirstOrDefault(s => s.Name == settings.DwgExportSetupName);
 
                     if (collector != null)
-                    {
                         options = collector.GetDWGExportOptions();
-                    }
                 }
                 catch (Exception ex)
                 {
@@ -74,62 +69,10 @@ namespace Licorp_CombineCAD.Services
             }
 
             if (options == null)
-            {
-                options = CreateSheetOnlyDWGOptions(settings);
-            }
-            else
-            {
-                OverrideOptionsFromSetup(options, settings);
-            }
-
-            return options;
-        }
-
-        private void OverrideOptionsFromSetup(DWGExportOptions options, ExportSettings settings)
-        {
-            try
-            {
-                Trace.WriteLine("[DwgExport] Overriding loaded setup options with clean export settings");
-                ConfigureCleanExportOptions(options, settings);
-                Trace.WriteLine("[DwgExport] Setup options overridden - XREF prevention applied");
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[DwgExport] Error overriding setup options: {ex.Message}");
-            }
-        }
-
-        private DWGExportOptions CreateSheetOnlyDWGOptions(ExportSettings settings)
-        {
-            var options = new DWGExportOptions();
-            Trace.WriteLine("[DwgExport] Creating ULTRA CLEAN options (Export+ method)");
+                options = new DWGExportOptions();
 
             ConfigureCleanExportOptions(options, settings);
-
-            Trace.WriteLine($"[DwgExport] FileVersion = {options.FileVersion}");
-            Trace.WriteLine("[DwgExport] ================================");
-            Trace.WriteLine("[DwgExport] ULTRA CLEAN EXPORT configured!");
-            Trace.WriteLine("[DwgExport] Should export FULL GEOMETRY into 1 file");
-            Trace.WriteLine("[DwgExport] ================================");
-
             return options;
-        }
-
-        private void TrySetProperty(DWGExportOptions options, string propertyName, object value)
-        {
-            try
-            {
-                var property = typeof(DWGExportOptions).GetProperty(propertyName);
-                if (property != null && property.CanWrite)
-                {
-                    property.SetValue(options, value);
-                    Trace.WriteLine($"[DwgExport] Set {propertyName} = {value}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[DwgExport] Failed to set {propertyName}: {ex.Message}");
-            }
         }
 
         private void ConfigureCleanExportOptions(DWGExportOptions options, ExportSettings settings)
@@ -137,9 +80,7 @@ namespace Licorp_CombineCAD.Services
             TrySetProperty(options, "ExportingAreas", false);
             // Revit exports sheet views as XREF DWGs when MergedViews is false.
             // Combined output requires each sheet export to be self-contained.
-            var mergedViews = true;
-            TrySetProperty(options, "MergedViews", mergedViews);
-            Trace.WriteLine($"[DwgExport] MergedViews = {mergedViews} (self-contained sheet DWG for AutoCAD merge)");
+            TrySetProperty(options, "MergedViews", true);
             options.SharedCoords = false;
             TrySetProperty(options, "ExportRoomsAndAreas", false);
             TrySetProperty(options, "PropOverrides", false);
@@ -149,26 +90,19 @@ namespace Licorp_CombineCAD.Services
                 .GetTypes()
                 .FirstOrDefault(t => t.Name == "ACAObjectPreference");
             if (acaPrefType != null)
-            {
-                var geometryValue = Enum.Parse(acaPrefType, "Geometry");
-                TrySetProperty(options, "ACAPreference", geometryValue);
-            }
+                TrySetProperty(options, "ACAPreference", Enum.Parse(acaPrefType, "Geometry"));
 
             try
             {
-                var targetUnit = Enum.Parse(typeof(ExportUnit), "Millimeter");
-                TrySetProperty(options, "TargetUnit", targetUnit);
-                Trace.WriteLine("[DwgExport] TargetUnit = Millimeter");
+                TrySetProperty(options, "TargetUnit", Enum.Parse(typeof(ExportUnit), "Millimeter"));
             }
             catch
             {
                 TrySetProperty(options, "TargetUnit", ExportUnit.Default);
-                Trace.WriteLine("[DwgExport] TargetUnit = Default (fallback)");
             }
 
             TrySetProperty(options, "Colors", GetEnumValue("ExportColorMode", "IndexColors"));
             TrySetProperty(options, "LineScaling", GetEnumValue("LineScaling", "ViewScale"));
-
             TrySetProperty(options, "HideReferencePlane", true);
             TrySetProperty(options, "HideScopeBox", true);
             TrySetProperty(options, "HideUnreferenceViewTags", true);
@@ -177,18 +111,54 @@ namespace Licorp_CombineCAD.Services
             options.FileVersion = GetAcadVersion(settings.DwgVersion);
         }
 
+        private static void TrySetProperty(DWGExportOptions options, string propertyName, object value)
+        {
+            try
+            {
+                var property = typeof(DWGExportOptions).GetProperty(propertyName);
+                if (property != null && property.CanWrite)
+                    property.SetValue(options, value);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[DwgExport] Failed to set {propertyName}: {ex.Message}");
+            }
+        }
+
+        private static object GetEnumValue(string enumTypeName, string valueName)
+        {
+            try
+            {
+                var enumType = typeof(DWGExportOptions).Assembly
+                    .GetTypes()
+                    .FirstOrDefault(t => t.Name == enumTypeName && t.IsEnum);
+
+                if (enumType != null)
+                    return Enum.Parse(enumType, valueName);
+            }
+            catch { }
+
+            return null;
+        }
+
         public ExportResult ExportSheetsIndividually(
             List<SheetInfo> sheets, ExportSettings settings, DWGExportOptions options,
             IProgress<ExportProgressInfo> progress = null, CancellationToken cancellationToken = default)
         {
             var result = new ExportResult();
-            var totalTimer = System.Diagnostics.Stopwatch.StartNew();
+            var totalTimer = Stopwatch.StartNew();
             SmartScaleService smartScaleService = null;
 
             if (settings.SmartViewScale)
             {
-                smartScaleService = new SmartScaleService(_document);
-                Trace.WriteLine("[DwgExport] SmartScale enabled");
+                try
+                {
+                    smartScaleService = new SmartScaleService(_document);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[DwgExport] SmartScale init failed, continuing without it: {ex.Message}");
+                }
             }
 
             try
@@ -213,11 +183,6 @@ namespace Licorp_CombineCAD.Services
                         continue;
                     }
 
-                    if (sheet.HasNoView)
-                    {
-                        Trace.WriteLine($"[DwgExport] {sheet.SheetNumber} has no model viewport; exporting sheet content anyway.");
-                    }
-
                     try
                     {
                         progress?.Report(new ExportProgressInfo
@@ -230,7 +195,7 @@ namespace Licorp_CombineCAD.Services
 
                         DispatcherDoEvents();
 
-                        var sheetTimer = System.Diagnostics.Stopwatch.StartNew();
+                        var sheetTimer = Stopwatch.StartNew();
 
                         if (smartScaleService != null)
                         {
@@ -262,13 +227,6 @@ namespace Licorp_CombineCAD.Services
                                 smartScaleService.RestoreOriginalScale(viewSheet, trans);
                                 trans.Commit();
                             }
-                        }
-
-                        if (sheet.HasNoView && !string.IsNullOrEmpty(filePath))
-                        {
-                            Trace.WriteLine(
-                                $"[DwgExport] {sheet.SheetNumber} is schedule/annotation-only; " +
-                                "skipping post-export AcCoreConsole fix to avoid long waits.");
                         }
 
                         if (!string.IsNullOrEmpty(filePath))
@@ -307,67 +265,66 @@ namespace Licorp_CombineCAD.Services
             }
             finally
             {
-if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
-            {
-                ReloadLinkedModels();
-                _unloadedLinkIds = null;
+                // nothing to clean up here — link unload/reload was removed (dead code)
             }
+
+            totalTimer.Stop();
+            Trace.WriteLine($"[DwgExport] Total: {totalTimer.ElapsedMilliseconds}ms for {result.ExportedFiles.Count} sheets");
+
+            if (result.FailedSheets.Count > 0)
+                Trace.WriteLine($"[DwgExport] Failed sheets: {string.Join(", ", result.FailedSheets)}");
+
+            return result;
         }
-
-        totalTimer.Stop();
-        Trace.WriteLine($"[DwgExport] Total export time: {totalTimer.ElapsedMilliseconds}ms for {result.ExportedFiles.Count} sheets");
-
-        if (result.FailedSheets.Count > 0)
-        {
-            Trace.WriteLine($"[DwgExport] Failed sheets: {string.Join(", ", result.FailedSheets)}");
-        }
-
-        return result;
-    }
 
         private string ExportSingleSheet(ViewSheet viewSheet, SheetInfo sheetInfo, ExportSettings settings, DWGExportOptions options)
         {
-            string fileName = GenerateFileName(sheetInfo, settings.FileNameTemplate, _document);
-            fileName = SanitizeFileNamePart(fileName);
-            string fullPath = Path.Combine(settings.OutputFolder, fileName + ".dwg");
+            if (viewSheet == null) throw new ArgumentNullException(nameof(viewSheet));
+            if (sheetInfo == null) throw new ArgumentNullException(nameof(sheetInfo));
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            if (string.IsNullOrWhiteSpace(settings.OutputFolder))
+                throw new InvalidOperationException("OutputFolder is empty.");
 
+            string fileName;
+            try
+            {
+                fileName = GenerateFileName(sheetInfo, settings.FileNameTemplate, _document);
+                fileName = SanitizeFileNamePart(fileName);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[DwgExport] File-name generation failed for '{sheetInfo.SheetNumber}': {ex}");
+                throw;
+            }
+
+            var fullPath = Path.Combine(settings.OutputFolder, fileName + ".dwg");
             DeleteExportOutputIfExists(fullPath);
-            DeleteExportOutputIfExists(Path.Combine(settings.OutputFolder, fileName + ".pcp"));
 
             try
             {
                 ICollection<ElementId> sheetOnly = new List<ElementId> { viewSheet.Id };
-                Trace.WriteLine($"[DwgExport] Exporting sheet {viewSheet.SheetNumber} to {fullPath}");
+                Trace.WriteLine($"[DwgExport] Exporting {viewSheet.SheetNumber} to {fullPath}");
 
                 bool success = _document.Export(settings.OutputFolder, fileName, sheetOnly, options);
 
                 if (success && File.Exists(fullPath))
                 {
                     var fi = new FileInfo(fullPath);
-                    Trace.WriteLine($"[DwgExport] SUCCESS: {fileName}.dwg ({fi.Length / 1024} KB)");
-
+                    Trace.WriteLine($"[DwgExport] OK: {fileName}.dwg ({fi.Length / 1024} KB)");
                     if (fi.Length < 1024)
-                    {
-                        Trace.WriteLine($"[DwgExport] WARNING: File is very small ({fi.Length} bytes) - may be empty!");
-                    }
-
+                        Trace.WriteLine($"[DwgExport] WARNING: very small file ({fi.Length} bytes)");
                     if (DwgCleanupService.HasXRefFiles(fullPath))
-                    {
-                        Trace.WriteLine($"[DwgExport] XREF companion files detected - Revit split the export");
-                    }
-
+                        Trace.WriteLine($"[DwgExport] XREF companion files detected");
                     return fullPath;
                 }
 
                 if (success && !File.Exists(fullPath))
                 {
-                    Trace.WriteLine($"[DwgExport] WARNING: Export returned success but file not found at {fullPath}");
+                    Trace.WriteLine($"[DwgExport] WARNING: success but file not found at {fullPath}");
                     var possibleFiles = Directory.GetFiles(settings.OutputFolder, fileName + "*.dwg");
                     if (possibleFiles.Length > 0)
-                    {
-                        Trace.WriteLine($"[DwgExport] Found alternative: {possibleFiles[0]}");
                         return possibleFiles[0];
-                    }
                 }
 
                 Trace.WriteLine($"[DwgExport] FAILED: {sheetInfo.SheetNumber} - export returned {success}");
@@ -375,7 +332,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[DwgExport] Exception exporting {sheetInfo.SheetNumber}: {ex.Message}");
+                Trace.WriteLine($"[DwgExport] Exception exporting {sheetInfo.SheetNumber}: {ex}");
                 return null;
             }
         }
@@ -394,88 +351,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             return string.IsNullOrWhiteSpace(sanitized) ? "Unnamed" : sanitized;
         }
 
-        private List<ElementId> UnloadLinkedModels()
-        {
-            var unloadedIds = new List<ElementId>();
-
-            try
-            {
-                var linkTypes = new FilteredElementCollector(_document)
-                    .OfClass(typeof(RevitLinkType))
-                    .Cast<RevitLinkType>()
-                    .Where(lt => lt.GetLinkedFileStatus() == LinkedFileStatus.Loaded)
-                    .ToList();
-
-                if (linkTypes.Count == 0)
-                    return unloadedIds;
-
-                using (var trans = new Transaction(_document, "Unload Links for DWG Export"))
-                {
-                    trans.Start();
-
-                    foreach (var linkType in linkTypes)
-                    {
-                        try
-                        {
-                            linkType.Unload(null);
-                            unloadedIds.Add(linkType.Id);
-                            Trace.WriteLine($"[DwgExport] Unloaded: {linkType.Name}");
-                        }
-                        catch (Exception ex)
-                        {
-                            Trace.WriteLine($"[DwgExport] Failed to unload {linkType.Name}: {ex.Message}");
-                        }
-                    }
-
-                    trans.Commit();
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[DwgExport] Error unloading links: {ex.Message}");
-            }
-
-            return unloadedIds;
-        }
-
-        private void ReloadLinkedModels()
-        {
-            if (_unloadedLinkIds == null || _unloadedLinkIds.Count == 0)
-                return;
-
-            try
-            {
-                using (var trans = new Transaction(_document, "Reload Links after DWG Export"))
-                {
-                    trans.Start();
-
-                    foreach (var linkId in _unloadedLinkIds)
-                    {
-                        var linkType = _document.GetElement(linkId) as RevitLinkType;
-                        if (linkType != null)
-                        {
-                            try
-                            {
-                                linkType.Reload();
-                                Trace.WriteLine($"[DwgExport] Reloaded: {linkType.Name}");
-                            }
-                            catch (Exception ex)
-                            {
-                                Trace.WriteLine($"[DwgExport] Failed to reload {linkType.Name}: {ex.Message}");
-                            }
-                        }
-                    }
-
-                    trans.Commit();
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[DwgExport] Error reloading links: {ex.Message}");
-            }
-}
-
-    public static string GenerateFileName(SheetInfo sheet, string template, Document document = null)
+        public static string GenerateFileName(SheetInfo sheet, string template, Document document = null)
         {
             if (sheet == null)
                 return "";
@@ -491,9 +367,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                 .Replace("{ProjectName}", GetProjectInfoValue(document, "Name"));
 
             foreach (char c in Path.GetInvalidFileNameChars())
-            {
                 fileName = fileName.Replace(c, '-');
-            }
 
             fileName = fileName.Trim();
             if (string.IsNullOrWhiteSpace(fileName))
@@ -527,7 +401,6 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                 try
                 {
                     Directory.CreateDirectory(folder);
-                    Trace.WriteLine($"[DwgExport] Created folder: {folder}");
                 }
                 catch (Exception ex)
                 {
@@ -548,10 +421,8 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             foreach (var file in Directory.EnumerateFiles(folder))
             {
                 var name = Path.GetFileName(file);
-                if (!IsRevitGeneratedSupportFile(name, prefix))
-                    continue;
-
-                DeleteExportOutputIfExists(file);
+                if (IsRevitGeneratedSupportFile(name, prefix))
+                    DeleteExportOutputIfExists(file);
             }
         }
 
@@ -561,8 +432,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             if (string.IsNullOrWhiteSpace(title))
                 return "";
 
-            var chars = title.Where(char.IsLetterOrDigit).ToArray();
-            return new string(chars);
+            return new string(title.Where(char.IsLetterOrDigit).ToArray());
         }
 
         private static bool IsRevitGeneratedSupportFile(string fileName, string prefix)
@@ -592,7 +462,6 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             {
                 File.SetAttributes(path, FileAttributes.Normal);
                 File.Delete(path);
-                Trace.WriteLine($"[DwgExport] Removed old export file: {path}");
             }
             catch (Exception ex)
             {
@@ -619,11 +488,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
         {
             foreach (var file in files)
             {
-                try
-                {
-                    File.Delete(file);
-                    Trace.WriteLine($"[DwgExport] Cleaned up: {file}");
-                }
+                try { File.Delete(file); }
                 catch (Exception ex)
                 {
                     Trace.WriteLine($"[DwgExport] Failed to clean up {file}: {ex.Message}");
@@ -631,7 +496,7 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
             }
         }
 
-        private ACADVersion GetAcadVersion(string version)
+        private static ACADVersion GetAcadVersion(string version)
         {
             switch (version?.ToLower())
             {
@@ -640,95 +505,6 @@ if (_unloadedLinkIds != null && _unloadedLinkIds.Count > 0)
                 case "2010": return ACADVersion.R2010;
                 case "2007": return ACADVersion.R2007;
                 default: return ACADVersion.R2018;
-            }
-        }
-
-        private object GetEnumValue(string enumTypeName, string valueName)
-        {
-            try
-            {
-                var enumType = typeof(DWGExportOptions).Assembly
-                    .GetTypes()
-                    .FirstOrDefault(t => t.Name == enumTypeName && t.IsEnum);
-                
-                if (enumType != null)
-                {
-                    return Enum.Parse(enumType, valueName);
-                }
-            }
-            catch { }
-            
-            return null;
-        }
-
-        private void TryDeleteTempFile(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-                return;
-            try { if (File.Exists(path)) File.Delete(path); }
-            catch { }
-        }
-
-        private void FixEmptyModelSpaceFile(string filePath)
-        {
-            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
-                return;
-
-            var accoreconsolePath = AutoCadLocatorService.FindAcCoreConsole();
-            if (string.IsNullOrEmpty(accoreconsolePath))
-            {
-                Trace.WriteLine($"[DwgExport] AcCoreConsole not found, skipping fix for {Path.GetFileName(filePath)}");
-                return;
-            }
-
-            try
-            {
-                var lispPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Fix_{Guid.NewGuid():N}.lsp");
-                // LISP: Switch to PaperSpace (layout), add a tiny viewport, save, quit
-                var lisp = @"
-(defun c:LicorpFix ()
-  (command ""_.TILEMODE"" ""0"")
-  (command ""_.VIEWPORT"" ""3"" ""0,0,0"" ""0.001,0.001,0"")
-  (command ""_.ZOOM"" ""EXTENTS"")
-  (command ""_.QSAVE"")
-  (command ""_.QUIT"" ""Y"")
-)
-(LicorpFix)
-";
-                File.WriteAllText(lispPath, lisp);
-
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = accoreconsolePath,
-                    Arguments = $"/i \"{filePath}\" /l \"{lispPath}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = false,
-                    RedirectStandardError = false
-                };
-
-                using (var process = Process.Start(startInfo))
-                {
-                    if (process != null)
-                    {
-                        const int fixTimeoutMs = 30000;
-                        if (!process.WaitForExit(fixTimeoutMs))
-                        {
-                            try { process.Kill(); }
-                            catch { }
-                            Trace.WriteLine(
-                                $"[DwgExport] Fix timed out after {fixTimeoutMs / 1000}s for {Path.GetFileName(filePath)}");
-                            return;
-                        }
-                    }
-                }
-
-                TryDeleteTempFile(lispPath);
-                Trace.WriteLine($"[DwgExport] Fixed layout (added viewport): {Path.GetFileName(filePath)}");
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[DwgExport] Fix failed for {filePath}: {ex.Message}");
             }
         }
     }

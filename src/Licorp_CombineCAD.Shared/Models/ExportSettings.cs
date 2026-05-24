@@ -22,7 +22,6 @@ namespace Licorp_CombineCAD.Models
         // ===== Advanced Options (MLabs features) =====
         private bool _openAfterExport = false;
         private bool _smartViewScale = false;
-        private bool _progressAlwaysOnTop = true;
         private string _orderRuleSource = "Sheet Number";
         private string _selectedSheetScheduleId = "";
 
@@ -32,10 +31,6 @@ namespace Licorp_CombineCAD.Models
 
         private VerticalAlignment _verticalAlign = VerticalAlignment.Top;
         private SortMode _sortMode = SortMode.SheetNumber;
-        private string _modelSpaceArrangement = "Horizontal";
-        private int _gridColumns = 3;
-        private double _customSpacing = 50.0;
-        private bool _reverseSortOrder = false;
 
         // ===== Layout Name Template (Phase 3) =====
         private string _layoutNameTemplate = "{SheetNumber} - {SheetName}";
@@ -85,12 +80,6 @@ namespace Licorp_CombineCAD.Models
             set { _smartViewScale = value; OnPropertyChanged(); }
         }
 
-        public bool ProgressAlwaysOnTop
-        {
-            get => _progressAlwaysOnTop;
-            set { _progressAlwaysOnTop = value; OnPropertyChanged(); }
-        }
-
         public string OrderRuleSource
         {
             get => _orderRuleSource;
@@ -128,36 +117,6 @@ namespace Licorp_CombineCAD.Models
             set { _sortMode = value; OnPropertyChanged(); }
         }
 
-        public string ModelSpaceArrangement
-        {
-            get => _modelSpaceArrangement;
-            set { _modelSpaceArrangement = value; OnPropertyChanged(); }
-        }
-
-        public int GridColumns
-        {
-            get => _gridColumns;
-            set { _gridColumns = value; OnPropertyChanged(); }
-        }
-
-        public double CustomSpacing
-        {
-            get => _customSpacing;
-            set { _customSpacing = value; OnPropertyChanged(); }
-        }
-
-        public bool ReverseSortOrder
-        {
-            get => _reverseSortOrder;
-            set { _reverseSortOrder = value; OnPropertyChanged(); }
-        }
-
-        // ===== Layout Name Template (Phase 3) =====
-        /// <summary>
-        /// Template for layout names in merged DWG.
-        /// Available placeholders: {SheetNumber}, {SheetName}, {PaperSize}
-        /// Example: "{PaperSize} - {SheetName}" produces "A1 - Floor Plan"
-        /// </summary>
         public string LayoutNameTemplate
         {
             get => _layoutNameTemplate;
