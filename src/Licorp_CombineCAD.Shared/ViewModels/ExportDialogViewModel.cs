@@ -58,6 +58,7 @@ namespace Licorp_CombineCAD.ViewModels
         private bool _openAfterExport;
         private bool _preserveCoincidentLines;
         private bool _mergeLayers = true;
+        private bool _sheetSetEnabled = true;
         private int _selectedCount;
         private SheetScheduleInfo _selectedSheetSchedule;
         private CancellationTokenSource _cancellationTokenSource;
@@ -317,6 +318,12 @@ namespace Licorp_CombineCAD.ViewModels
         {
             get => _mergeLayers;
             set { _mergeLayers = value; OnPropertyChanged(); }
+        }
+
+        public bool SheetSetEnabled
+        {
+            get => _sheetSetEnabled;
+            set { _sheetSetEnabled = value; OnPropertyChanged(); }
         }
 
         public string SelectedSetsDisplay

@@ -12,6 +12,16 @@ namespace Licorp_MergeSheets
 {
     public class LayoutMerger
     {
+        public string LastError { get; private set; }
+
+        private static string FormatException(System.Exception ex, string operation)
+        {
+            var msg = ex.Message;
+            if (ex.InnerException != null)
+                msg += " | Inner: " + ex.InnerException.Message;
+            return $"[{operation}] {msg}";
+        }
+
         private const double LayoutSpacing = 50.0;
         private const string PaperBackgroundLayerName = "LICORP_PAPER_BACKGROUND";
         private const string ViewportLayerName = "VIEWPORTS";
@@ -30,7 +40,7 @@ namespace Licorp_MergeSheets
         // Cache for PlotSettings to avoid repeated RefreshLists calls
         private static string _cachedPlotDevice = null;
 
-        private void ReportProgress(MergeConfig config, int current, int total, string layoutName)
+        private void ReportProgress(MergeConfig config, int current, int total, string layoutName, string subPhase = null)
         {
             try
             {
@@ -41,6 +51,7 @@ namespace Licorp_MergeSheets
                     var progressData = new
                     {
                         Phase = "Merging",
+                        SubPhase = subPhase ?? "",
                         Current = current,
                         Total = total,
                         CurrentItem = layoutName,
@@ -144,6 +155,7 @@ namespace Licorp_MergeSheets
 
                 if (config.SourceFiles == null || config.SourceFiles.Count == 0)
                 {
+                    LastError = "No source files provided.";
                     AcadLogger.LogError("No source files provided");
                     return false;
                 }
@@ -160,6 +172,7 @@ namespace Licorp_MergeSheets
 
                 if (baseFile == null)
                 {
+                    LastError = "No valid source files found on disk.";
                     AcadLogger.LogError("No valid source files found");
                     return false;
                 }
@@ -306,6 +319,7 @@ namespace Licorp_MergeSheets
                             using (var srcTrans = sourceDb.TransactionManager.StartTransaction())
                             using (var outputTrans = outputDb.TransactionManager.StartTransaction())
                             {
+                                ReportProgress(config, processedCount, totalToProcess, desiredName, "Renaming blocks");
                                 RenameBlocksInDb(sourceDb, srcTrans, $"File{fileIndex}_");
 
                                 // Merge layers from source if enabled
@@ -398,6 +412,7 @@ namespace Licorp_MergeSheets
                                 var msIdMap = new IdMapping();
                                 if (msIds.Count > 0)
                                 {
+                                    ReportProgress(config, processedCount, totalToProcess, desiredName, "Cloning ModelSpace");
                                     sourceDb.WblockCloneObjects(
                                         msIds, outputMs.ObjectId, msIdMap, DuplicateRecordCloning.Replace, false);
 
@@ -421,6 +436,7 @@ namespace Licorp_MergeSheets
                                 _currentMsXOffset = msOffset.X + sourceVisibleExtents.MaxPoint.X + GetLayoutGap(sourceVisibleExtents);
                                 AcadLogger.LogInfo($"GD1: Updated next visible min X to {_currentMsXOffset:F2}");
 
+                                ReportProgress(config, processedCount, totalToProcess, desiredName, "Creating layouts");
                                 var destBtrId = CreateNewLayoutInDb(outputDb, outputTrans, desiredName);
                                 if (destBtrId.IsNull)
                                     destBtrId = ReuseEmptyDefaultLayout(outputDb, outputTrans, desiredName);
@@ -500,6 +516,7 @@ namespace Licorp_MergeSheets
                                 var psIdMap = new IdMapping();
                                 if (psIds.Count > 0)
                                 {
+                                    ReportProgress(config, processedCount, totalToProcess, desiredName, "Cloning PaperSpace");
                                     sourceDb.WblockCloneObjects(
                                         psIds, destBtrId, psIdMap, DuplicateRecordCloning.Replace, false);
                                 }
@@ -560,8 +577,8 @@ namespace Licorp_MergeSheets
                                     PlotSettings = savedPlotSettings
                                 });
 
-                                outputTrans.Commit();
                                 srcTrans.Commit();
+                                outputTrans.Commit();
                             }
                         }
 
@@ -590,6 +607,7 @@ namespace Licorp_MergeSheets
 
                     if (processedCount == 0 && clonedCount <= 1)
                     {
+                        LastError = $"All source layouts failed ({failedLayouts.Count} errors). No output generated.";
                         AcadLogger.LogError("All source layouts failed. No output generated.");
                         return false;
                     }
@@ -620,9 +638,15 @@ namespace Licorp_MergeSheets
             }
             catch (System.Exception ex)
             {
+                LastError = FormatException(ex, "MultiLayout");
                 AcadLogger.LogError($"MultiLayout error: {ex.Message}");
                 AcadLogger.LogError($"Stack: {ex.StackTrace}");
                 return false;
+            }
+            finally
+            {
+                ClearExtentsCache();
+                ClearPlotSettingsCache();
             }
         }
 
@@ -871,9 +895,14 @@ namespace Licorp_MergeSheets
             }
             catch (System.Exception ex)
             {
+                LastError = FormatException(ex, "SingleLayout");
                 AcadLogger.LogError($"SingleLayout error: {ex.Message}");
                 AcadLogger.LogError($"Stack: {ex.StackTrace}");
                 return false;
+            }
+            finally
+            {
+                ClearExtentsCache();
             }
         }
 
@@ -1079,9 +1108,14 @@ namespace Licorp_MergeSheets
             }
             catch (System.Exception ex)
             {
+                LastError = FormatException(ex, "ModelSpace");
                 AcadLogger.Log($"[LayoutMerger] ModelSpace error: {ex.Message}");
                 AcadLogger.Log($"[LayoutMerger] ModelSpace stack: {ex.StackTrace}");
                 return false;
+            }
+            finally
+            {
+                ClearExtentsCache();
             }
         }
 
@@ -1117,8 +1151,7 @@ namespace Licorp_MergeSheets
                     ? config.ExpectedSheetCount
                     : (config.SourceFiles?.Count ?? 0);
 
-                var db = new Database(false, true);
-                using (db)
+                using (var db = new Database(false, true))
                 {
                     db.ReadDwgFile(config.OutputPath, FileShare.ReadWrite, true, "");
                     db.CloseInput(true);
@@ -3309,33 +3342,122 @@ private static string AppendDirectorySeparator(string path)
 private void RenameBlocksInDb(Database db, Transaction trans, string prefix)
 {
     var bt = (BlockTable)trans.GetObject(db.BlockTableId, OpenMode.ForRead);
-    int renamedCount = 0;
-    int skippedCount = 0;
-
+    
+    // Collect all renamable blocks with their dependency info
+    var blockInfos = new List<BlockRenameInfo>();
+    var blockNameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    
     foreach (ObjectId btrId in bt)
     {
         var btr = (BlockTableRecord)trans.GetObject(btrId, OpenMode.ForRead);
         if (btr.IsLayout || btr.IsAnonymous || btr.IsFromExternalReference)
-        {
-            skippedCount++;
             continue;
-        }
 
         string oldName = btr.Name;
         if (oldName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            skippedCount++;
             continue;
+
+        // Check if this block contains references to other blocks
+        var nestedBlockNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (ObjectId entId in btr)
+        {
+            try
+            {
+                var ent = trans.GetObject(entId, OpenMode.ForRead) as Entity;
+                if (ent is BlockReference br)
+                {
+                    var brDef = trans.GetObject(br.BlockTableRecord, OpenMode.ForRead) as BlockTableRecord;
+                    if (brDef != null && !brDef.IsAnonymous && !brDef.IsLayout)
+                        nestedBlockNames.Add(brDef.Name);
+                }
+            }
+            catch { }
         }
 
-        string newName = prefix + oldName;
-
-        var btrWrite = (BlockTableRecord)trans.GetObject(btrId, OpenMode.ForWrite);
-        btrWrite.Name = newName;
-        renamedCount++;
+        blockInfos.Add(new BlockRenameInfo
+        {
+            ObjectId = btrId,
+            OldName = oldName,
+            NewName = prefix + oldName,
+            NestedBlockNames = nestedBlockNames
+        });
     }
 
-    AcadLogger.LogInfo($"Renamed {renamedCount} block definitions with prefix '{prefix}' (skipped {skippedCount})");
+    // Sort by dependency: leaf blocks first (blocks with no nested blocks),
+    // then blocks that depend on already-renamed blocks
+    var sortedBlocks = TopologicalSortBlocks(blockInfos);
+    
+    int renamedCount = 0;
+    int skippedCount = 0;
+    int errorCount = 0;
+
+    foreach (var blockInfo in sortedBlocks)
+    {
+        try
+        {
+            // Validate new name length (AutoCAD limit is 255 characters)
+            if (blockInfo.NewName.Length > 255)
+            {
+                AcadLogger.LogWarning($"Block name too long after prefix ({blockInfo.NewName.Length} chars): '{blockInfo.OldName}'");
+                skippedCount++;
+                continue;
+            }
+
+            var btrWrite = (BlockTableRecord)trans.GetObject(blockInfo.ObjectId, OpenMode.ForWrite);
+            btrWrite.Name = blockInfo.NewName;
+            blockNameMap[blockInfo.OldName] = blockInfo.NewName;
+            renamedCount++;
+        }
+        catch (System.Exception ex)
+        {
+            AcadLogger.LogWarning($"Failed to rename block '{blockInfo.OldName}' to '{blockInfo.NewName}': {ex.Message}");
+            errorCount++;
+        }
+    }
+
+    AcadLogger.LogInfo($"Renamed {renamedCount} block definitions with prefix '{prefix}' (skipped {skippedCount}, errors {errorCount})");
+}
+
+private List<BlockRenameInfo> TopologicalSortBlocks(List<BlockRenameInfo> blocks)
+{
+    var result = new List<BlockRenameInfo>();
+    var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var blockLookup = blocks.ToDictionary(b => b.OldName, b => b, StringComparer.OrdinalIgnoreCase);
+
+    foreach (var block in blocks)
+    {
+        if (!visited.Contains(block.OldName))
+        {
+            VisitBlock(block, blockLookup, visited, result);
+        }
+    }
+
+    return result;
+}
+
+private void VisitBlock(BlockRenameInfo block, Dictionary<string, BlockRenameInfo> blockLookup, 
+    HashSet<string> visited, List<BlockRenameInfo> result)
+{
+    visited.Add(block.OldName);
+
+    // Visit nested blocks first (dependencies)
+    foreach (var nestedName in block.NestedBlockNames)
+    {
+        if (!visited.Contains(nestedName) && blockLookup.ContainsKey(nestedName))
+        {
+            VisitBlock(blockLookup[nestedName], blockLookup, visited, result);
+        }
+    }
+
+    result.Add(block);
+}
+
+private class BlockRenameInfo
+{
+    public ObjectId ObjectId { get; set; }
+    public string OldName { get; set; }
+    public string NewName { get; set; }
+    public HashSet<string> NestedBlockNames { get; set; }
 }
 
 private Layout GetSourceLayout(Database db, Transaction trans, string desiredLayoutName)
@@ -5085,9 +5207,8 @@ private Layout GetSourceLayout(Database db, Transaction trans, string desiredLay
         private List<RasterImageInfo> ScanRasterImages(string dwgPath)
         {
             var result = new List<RasterImageInfo>();
-            var db = new Database(false, true);
 
-            using (db)
+            using (var db = new Database(false, true))
             {
                 db.ReadDwgFile(dwgPath, FileShare.ReadWrite, true, "");
                 db.CloseInput(true);

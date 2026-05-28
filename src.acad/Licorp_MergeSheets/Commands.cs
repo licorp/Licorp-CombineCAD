@@ -155,6 +155,24 @@ namespace Licorp_MergeSheets
                         statusMessage = "Preflight check failed: " + string.Join("; ", preflightResult.Errors);
                         return;
                     }
+
+                    if (config.ExpectedSheetCount > 0 && preflightResult.ValidFileCount != config.ExpectedSheetCount)
+                    {
+                        var lockedWarnings = preflightResult.Warnings
+                            .Where(w => w.IndexOf("locked", StringComparison.OrdinalIgnoreCase) >= 0)
+                            .ToList();
+
+                        var msg = $"Preflight failed: expected {config.ExpectedSheetCount} source DWG(s), " +
+                                  $"but only {preflightResult.ValidFileCount} valid. " +
+                                  (lockedWarnings.Count > 0
+                                      ? string.Join(" | ", lockedWarnings)
+                                      : $"{config.ExpectedSheetCount - preflightResult.ValidFileCount} file(s) missing or invalid.");
+
+                        AcadLogger.LogError(msg);
+                        statusMessage = msg;
+                        success = false;
+                        return;
+                    }
                 }
 
                 if (config.SourceFiles != null)
@@ -250,14 +268,16 @@ namespace Licorp_MergeSheets
                 else
                 {
                     if (string.IsNullOrWhiteSpace(statusMessage))
-                        statusMessage = "Merge failed. Check merge log for details.";
-                    AcadLogger.LogError("Merge FAILED - check logs above for details");
+                        statusMessage = merger.LastError ?? "Merge failed. Check merge log for details.";
+                    AcadLogger.LogError($"Merge FAILED: {statusMessage}");
                 }
             }
             catch (System.Exception ex)
             {
                 success = false;
                 statusMessage = ex.Message;
+                if (ex.InnerException != null)
+                    statusMessage += " | Inner: " + ex.InnerException.Message;
                 AcadLogger.LogSection("EXCEPTION CAUGHT");
                 AcadLogger.LogError($"Message: {ex.Message}");
                 AcadLogger.LogError($"Type: {ex.GetType().FullName}");
@@ -287,56 +307,84 @@ namespace Licorp_MergeSheets
         {
             try
             {
-                if (config == null || string.IsNullOrWhiteSpace(config.StatusPath))
+                if (config == null)
+                {
+                    AcadLogger.LogWarning("WriteStatus skipped: config is null.");
                     return;
+                }
+
+                var effectiveStatusPath = config.StatusPath;
+                if (string.IsNullOrWhiteSpace(effectiveStatusPath))
+                {
+                    effectiveStatusPath = Path.Combine(Path.GetTempPath(), "Licorp_MergeSheets_Status.json");
+                    AcadLogger.LogWarning($"StatusPath was empty, using fallback: {effectiveStatusPath}");
+                }
+
+                var finalMessage = string.IsNullOrWhiteSpace(message)
+                    ? (success ? "Merge completed successfully." : "Merge failed.")
+                    : message;
+
+                var logPath = AcadLogger.GetLogFilePath();
 
                 var status = new
                 {
+                    success = success,
+                    output = config.OutputPath,
+                    error = success ? null : finalMessage,
+                    log = logPath,
+                    timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+
                     Success = success,
-                    Message = string.IsNullOrWhiteSpace(message)
-                        ? (success ? "Merge completed successfully." : "Merge failed.")
-                        : message,
+                    Message = finalMessage,
                     OutputPath = config.OutputPath,
-                    LogPath = AcadLogger.GetLogFilePath()
+                    LogPath = logPath
                 };
 
                 var json = JsonConvert.SerializeObject(status, Formatting.Indented);
-                
-                // Atomic write: write to temp file first, then move to avoid partial writes
-                var tempPath = config.StatusPath + ".tmp";
+
+                var tempPath = effectiveStatusPath + ".tmp";
+
+                Directory.CreateDirectory(Path.GetDirectoryName(effectiveStatusPath));
+
                 File.WriteAllText(tempPath, json);
-                
-                // Move temp to final path (atomic on same volume)
-                if (File.Exists(config.StatusPath))
-                    File.Delete(config.StatusPath);
-                File.Move(tempPath, config.StatusPath);
-                
-                // Force flush to disk to ensure C# side can read it immediately
-                using (var fs = new FileStream(config.StatusPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+
+                if (File.Exists(effectiveStatusPath))
+                    File.Delete(effectiveStatusPath);
+
+                File.Move(tempPath, effectiveStatusPath);
+
+                using (var fs = new FileStream(effectiveStatusPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
                 {
                     fs.Flush(true);
                 }
-                
-                AcadLogger.LogInfo($"Status written: {config.StatusPath} (success={success})");
+
+                AcadLogger.LogInfo($"Status written: {effectiveStatusPath} (success={success})");
+                AcadLogger.LogDebug($"Status JSON:\n{json}");
+
+                System.Threading.Thread.Sleep(200);
             }
             catch (System.Exception ex)
             {
                 AcadLogger.LogError($"CRITICAL: Failed to write status file: {ex.Message}");
                 AcadLogger.LogError($"Status path: {config?.StatusPath}");
-                
-                // Emergency fallback: write to a known location
-                try 
-                { 
+
+                try
+                {
                     var emergencyPath = Path.Combine(Path.GetTempPath(), "Licorp_EmergencyStatus.json");
-                    File.WriteAllText(emergencyPath, JsonConvert.SerializeObject(new 
-                    { 
-                        Success = false, 
+                    File.WriteAllText(emergencyPath, JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = $"Status write failed: {ex.Message}",
+                        originalStatusPath = config?.StatusPath,
+                        timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+
+                        Success = false,
                         Message = $"Status write failed: {ex.Message}",
                         OriginalStatusPath = config?.StatusPath,
                         Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
                     }, Formatting.Indented));
                     AcadLogger.LogInfo($"Emergency status written to: {emergencyPath}");
-                } 
+                }
                 catch (System.Exception emergencyEx)
                 {
                     AcadLogger.LogError($"Emergency status write also failed: {emergencyEx.Message}");

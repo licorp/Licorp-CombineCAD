@@ -220,6 +220,7 @@ namespace Licorp_CombineCAD.ViewModels
                         mergeService.SetExpectedSheetCount(exportedFiles.Count);
                         mergeService.SetMergeLayers(settings.MergeLayers);
                         mergeService.SetSheetSortMode(settings.SortMode.ToString());
+                        mergeService.SetSheetSetEnabled(SheetSetEnabled);
 
                         var exportedSheets = exportResult?.ExportedSheets ?? new List<SheetInfo>();
                         // Apply LayoutNameTemplate with {SheetNumber}, {SheetName}, {PaperSize} placeholders
@@ -248,7 +249,10 @@ namespace Licorp_CombineCAD.ViewModels
                         {
                             _uiDispatcher.BeginInvoke(new Action(() =>
                             {
-                                progressVm.Update(info.Phase, info.CurrentItem, totalSheets + info.Current, totalSheets * 2);
+                                var displayItem = !string.IsNullOrEmpty(info.SubPhase)
+                                    ? $"{info.SubPhase}: {info.CurrentItem}"
+                                    : info.CurrentItem;
+                                progressVm.Update(info.Phase, displayItem, totalSheets + info.Current, totalSheets * 2);
                             }));
                         });
 

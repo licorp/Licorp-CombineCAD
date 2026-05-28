@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,21 +9,46 @@ using Autodesk.Revit.UI;
 
 namespace Licorp_CombineCAD.Services
 {
+    internal sealed class PendingOperation
+    {
+        public Action<UIApplication> Action { get; }
+        public TaskCompletionSource<bool> Tcs { get; }
+
+        public PendingOperation(Action<UIApplication> action)
+        {
+            Action = action;
+            Tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
     public class ExportEventHandler : IExternalEventHandler
     {
-        public Action<UIApplication> ExecuteAction { get; set; }
+        private readonly ConcurrentQueue<PendingOperation> _queue;
+
+        internal ExportEventHandler(ConcurrentQueue<PendingOperation> queue)
+        {
+            _queue = queue;
+        }
+
         public string Name => "Licorp_CombineCAD_Export";
 
+        // Drain ALL queued operations in one Execute call.
+        // Revit may coalesce multiple Raise() calls into a single Execute(),
+        // so we must process everything available, not just one item.
         public void Execute(UIApplication application)
         {
-            try
+            while (_queue.TryDequeue(out var op))
             {
-                ExecuteAction?.Invoke(application);
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[ExportEventHandler] Error: {ex.Message}");
-                Trace.WriteLine($"[ExportEventHandler] Stack: {ex.StackTrace}");
+                try
+                {
+                    op.Action(application);
+                    op.Tcs.TrySetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[ExportEventHandler] Error: {ex.Message}");
+                    op.Tcs.TrySetException(ex);
+                }
             }
         }
 
@@ -31,58 +57,44 @@ namespace Licorp_CombineCAD.Services
 
     public class RevitThreadService
     {
+        private readonly ConcurrentQueue<PendingOperation> _queue = new ConcurrentQueue<PendingOperation>();
         private readonly ExternalEvent _externalEvent;
         private readonly ExportEventHandler _handler;
-        private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
         public RevitThreadService()
         {
-            _handler = new ExportEventHandler();
+            _handler = new ExportEventHandler(_queue);
             _externalEvent = ExternalEvent.Create(_handler);
         }
 
+        /// <summary>Fire-and-forget: enqueues action with no completion signal.</summary>
         public void RunOnRevitThread(Action<UIApplication> action)
         {
-            _handler.ExecuteAction = action;
+            _queue.Enqueue(new PendingOperation(action));
             _externalEvent.Raise();
         }
 
         public async Task<T> RunOnRevitThreadAsync<T>(Func<UIApplication, T> action, TimeSpan? timeout = null)
         {
-            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            T result = default;
+            var op = new PendingOperation(app => { result = action(app); });
 
-            await _semaphore.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                _handler.ExecuteAction = app =>
-                {
-                    try
-                    {
-                        tcs.SetResult(action(app));
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.SetException(ex);
-                    }
-                };
-                _externalEvent.Raise();
-                Trace.WriteLine("[RevitThread] External event raised");
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
+            _queue.Enqueue(op);
+            _externalEvent.Raise();
+            Trace.WriteLine("[RevitThread] External event raised");
 
-            // Await without capturing the UI SynchronizationContext so the UI thread
-            // stays free to process Revit's ExternalEvent dispatch on all versions.
             if (timeout.HasValue)
             {
-                var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeout.Value)).ConfigureAwait(false);
-                if (completed != tcs.Task)
+                var completed = await Task.WhenAny(op.Tcs.Task, Task.Delay(timeout.Value)).ConfigureAwait(false);
+                if (completed != op.Tcs.Task)
                     throw new TimeoutException($"Revit thread operation timed out after {timeout.Value.TotalSeconds}s.");
             }
+            else
+            {
+                await op.Tcs.Task.ConfigureAwait(false);
+            }
 
-            return await tcs.Task.ConfigureAwait(false);
+            return result;
         }
 
         public Task RunOnRevitThreadAsync(Action<UIApplication> action, TimeSpan? timeout = null)
@@ -133,8 +145,11 @@ namespace Licorp_CombineCAD.Services
 
         public void Dispose()
         {
+            // Cancel any pending operations before disposing
+            while (_queue.TryDequeue(out var op))
+                op.Tcs.TrySetException(new ObjectDisposedException(nameof(RevitThreadService)));
+
             try { _externalEvent?.Dispose(); } catch { }
-            _semaphore?.Dispose();
         }
     }
 }

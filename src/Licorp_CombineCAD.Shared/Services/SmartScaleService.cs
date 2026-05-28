@@ -162,6 +162,15 @@ namespace Licorp_CombineCAD.Services
             }
         }
 
+        /// <summary>
+        /// Clear all cached state - call after batch export completes
+        /// </summary>
+        public void ClearState()
+        {
+            _originalValues.Clear();
+            Trace.WriteLine("[SmartScale] State cleared");
+        }
+
         // ===== #1: As Indicated Fix (Mixed Scales) =====
 
         /// <summary>

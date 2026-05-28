@@ -132,6 +132,13 @@ echo AutoCAD [net8.0] - OK
 REM Copy PackageContents.xml from source
 copy /Y "!ROOT!src.acad\Licorp_MergeSheets\PackageContents.xml" "%ACAD_BUNDLE%\" >nul 2>&1
 
+REM Copy blank_seed.dwg for AcCoreConsole /i input (avoids locking source files)
+if exist "!ROOT!src.acad\Licorp_MergeSheets\blank_seed.dwg" (
+copy /Y "!ROOT!src.acad\Licorp_MergeSheets\blank_seed.dwg" "%ACAD_BUNDLE%\Contents\2024\" >nul 2>&1
+copy /Y "!ROOT!src.acad\Licorp_MergeSheets\blank_seed.dwg" "%ACAD_BUNDLE%\Contents\2025\" >nul 2>&1
+echo blank_seed.dwg - OK
+)
+
 echo AutoCAD - Contents\2024\ and Contents\2025\ deployed
 ) else (
     echo       AutoCAD - Skipped (build failed)

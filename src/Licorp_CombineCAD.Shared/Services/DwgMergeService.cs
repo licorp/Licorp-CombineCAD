@@ -78,6 +78,11 @@ namespace Licorp_CombineCAD.Services
             _reliability.MergeLayers = mergeLayers;
         }
 
+        public void SetSheetSetEnabled(bool enabled)
+        {
+            _reliability.SheetSetEnabled = enabled;
+        }
+
         public void SetSheetSortMode(string sortMode)
         {
             _sheetSortMode = sortMode ?? "SheetNumber";
@@ -280,14 +285,25 @@ namespace Licorp_CombineCAD.Services
             string configPath = null;
             string scriptPath = null;
             string statusPath = null;
+            string seedPath = null;
 
             try
             {
                 EnsurePluginInstalled();
 
+                if (!File.Exists(_pluginPath))
+                {
+                    LastError = $"Merge plugin DLL not found: {_pluginPath}. Ensure build-deploy.bat has been run.";
+                    Trace.WriteLine($"[Merge] {LastError}");
+                    return false;
+                }
+
                 configPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_{mode}_{Guid.NewGuid():N}.json");
                 scriptPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_{mode}_{Guid.NewGuid():N}.scr");
                 statusPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_{mode}_{Guid.NewGuid():N}.status.json");
+
+                TryDeleteTempFile(statusPath);
+                TryDeleteTempFile(statusPath + ".progress.json");
 
                 File.WriteAllText(configPath, CreateMergeConfig(validFiles, layoutNames, paperSizes, outputPath, mode, statusPath));
                 CreateMergeScript(scriptPath, configPath);
@@ -311,7 +327,9 @@ namespace Licorp_CombineCAD.Services
                     Total = validFiles.Count
                 });
 
-                var inputPath = string.IsNullOrWhiteSpace(inputOverride) ? validFiles[0] : inputOverride;
+                var inputPath = string.IsNullOrWhiteSpace(inputOverride)
+                    ? PrepareSeedDwg(validFiles[0], out seedPath)
+                    : inputOverride;
 
                 // Start progress file monitoring in background
                 var progressFilePath = statusPath + ".progress.json";
@@ -332,6 +350,7 @@ namespace Licorp_CombineCAD.Services
                                     progress?.Report(new MergeProgressInfo
                                     {
                                         Phase = (string)progressData.Phase ?? "Merging",
+                                        SubPhase = (string)progressData.SubPhase ?? "",
                                         CurrentItem = (string)progressData.CurrentItem ?? "",
                                         Current = (int)progressData.Current,
                                         Total = (int)progressData.Total
@@ -374,6 +393,7 @@ namespace Licorp_CombineCAD.Services
                 TryDeleteTempFile(configPath);
                 TryDeleteTempFile(scriptPath);
                 TryDeleteTempFile(statusPath);
+                TryDeleteTempFile(seedPath);
             }
         }
 
@@ -445,6 +465,27 @@ namespace Licorp_CombineCAD.Services
             return seedPath;
         }
 
+        private string PrepareSeedDwg(string firstSourceFile, out string seedPath)
+        {
+            var pluginDir = Path.GetDirectoryName(_pluginPath);
+            var templateSeed = Path.Combine(pluginDir, "blank_seed.dwg");
+
+            if (File.Exists(templateSeed))
+            {
+                seedPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_BlankSeed_{Guid.NewGuid():N}.dwg");
+                CopyFileShared(templateSeed, seedPath);
+                Trace.WriteLine($"[Merge] Using blank_seed.dwg as /i input: {seedPath}");
+            }
+            else
+            {
+                seedPath = Path.Combine(Path.GetTempPath(), $"LicorpCAD_Seed_{Guid.NewGuid():N}.dwg");
+                CopyFileShared(firstSourceFile, seedPath);
+                Trace.WriteLine($"[Merge] blank_seed.dwg not found, copied source as seed: {seedPath}");
+            }
+
+            return seedPath;
+        }
+
         private void CopyFileShared(string sourcePath, string destPath)
         {
             using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
@@ -455,6 +496,52 @@ namespace Licorp_CombineCAD.Services
         }
 
         private async Task<bool> RunMergeEngineAsync(
+            string scriptPath,
+            string inputPath,
+            string outputPath,
+            string statusPath,
+            int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            const int maxRetries = 1;
+            const int retryDelayMs = 3000;
+
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
+            {
+                if (attempt > 0)
+                {
+                    Trace.WriteLine($"[Merge] Retry attempt {attempt}/{maxRetries} after {retryDelayMs}ms delay");
+                    LastError = null;
+                    await Task.Delay(retryDelayMs, cancellationToken);
+                }
+
+                bool success = await RunMergeEngineInternalAsync(scriptPath, inputPath, outputPath, statusPath, timeoutMs, cancellationToken);
+                if (success)
+                    return true;
+
+                // Don't retry if plugin explicitly reported failure (not a transient error)
+                if (_lastRunReturnedPluginStatus)
+                {
+                    Trace.WriteLine("[Merge] Plugin returned explicit failure; not retrying.");
+                    return false;
+                }
+
+                // Don't retry if cancellation was requested
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    Trace.WriteLine("[Merge] Cancelled; not retrying.");
+                    return false;
+                }
+
+                if (attempt < maxRetries)
+                    Trace.WriteLine($"[Merge] Attempt {attempt + 1} failed, will retry...");
+            }
+
+            LastError = LastError ?? "Merge failed after all retry attempts.";
+            return false;
+        }
+
+        private async Task<bool> RunMergeEngineInternalAsync(
             string scriptPath,
             string inputPath,
             string outputPath,
@@ -605,12 +692,12 @@ namespace Licorp_CombineCAD.Services
 
                     var runStatus = await WaitForMergeResultAsync(process, statusPath, outputPath, cancellationToken);
 
-                    LastLogPath = runStatus?.LogPath ?? LastLogPath;
-                    if (runStatus != null && runStatus.Success)
+                    LastLogPath = runStatus?.EffectiveLogPath ?? LastLogPath;
+                    if (runStatus != null && runStatus.IsSuccess)
                     {
                         LastError = null;
                         _lastRunReturnedPluginStatus = true;
-                        Trace.WriteLine($"[ACAD-RUN] merge success: output={runStatus.OutputPath}, message={runStatus.Message}");
+                        Trace.WriteLine($"[ACAD-RUN] merge success: output={runStatus.EffectiveOutputPath}, message={runStatus.EffectiveMessage}");
                         return true;
                     }
 
@@ -695,15 +782,15 @@ namespace Licorp_CombineCAD.Services
                 {
                     sawStatus = true;
                     _lastRunReturnedPluginStatus = true;
-                    LastLogPath = status.LogPath;
+                    LastLogPath = status.EffectiveLogPath;
 
-                    var finalOutputPath = !string.IsNullOrWhiteSpace(status.OutputPath)
-                        ? status.OutputPath
+                    var finalOutputPath = !string.IsNullOrWhiteSpace(status.EffectiveOutputPath)
+                        ? status.EffectiveOutputPath
                         : expectedOutputPath;
 
-                    Trace.WriteLine($"[ACAD-RUN] plugin-status success={status.Success}, message={status.Message}, outputPath={status.OutputPath}, logPath={status.LogPath}");
+                    Trace.WriteLine($"[ACAD-RUN] plugin-status success={status.IsSuccess}, message={status.EffectiveMessage}, outputPath={status.EffectiveOutputPath}, logPath={status.EffectiveLogPath}");
 
-                    if (status.Success)
+                    if (status.IsSuccess)
                     {
                         if (!string.IsNullOrWhiteSpace(finalOutputPath) && File.Exists(finalOutputPath))
                         {
@@ -716,9 +803,9 @@ namespace Licorp_CombineCAD.Services
                     else
                     {
                         sawStatusFailure = true;
-                        LastError = string.IsNullOrWhiteSpace(status.Message)
+                        LastError = string.IsNullOrWhiteSpace(status.EffectiveMessage)
                             ? $"{engineName} reported failure status."
-                            : status.Message;
+                            : status.EffectiveMessage;
 
                         Trace.WriteLine($"[ACAD-RUN] plugin reported failure status (attempt {i + 1}/20). lastError={LastError}");
                     }
@@ -755,6 +842,20 @@ namespace Licorp_CombineCAD.Services
             else
                 LastError = $"{engineName} exited with code {exitCode}.";
 
+            Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: exitCode={exitCode}");
+            Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: statusPath={statusPath}");
+            Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: statusFileExists={File.Exists(statusPath)}");
+            Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: expectedOutputPath={expectedOutputPath}");
+            Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: outputFileExists={File.Exists(expectedOutputPath)}");
+            Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: pluginPath={_pluginPath}");
+            Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: pluginExists={File.Exists(_pluginPath)}");
+            Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: sawStatus={sawStatus}, sawStatusFailure={sawStatusFailure}");
+            if (File.Exists(statusPath))
+            {
+                try { Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: statusContent={File.ReadAllText(statusPath)}"); }
+                catch (Exception diagEx) { Trace.WriteLine($"[ACAD-RUN] DIAGNOSTIC: statusReadError={diagEx.Message}"); }
+            }
+
             return false;
         }
 
@@ -784,17 +885,17 @@ namespace Licorp_CombineCAD.Services
 
                         if (status != null)
                         {
-                            var finalOutput = !string.IsNullOrWhiteSpace(status.OutputPath)
-                                ? status.OutputPath
+                            var finalOutput = !string.IsNullOrWhiteSpace(status.EffectiveOutputPath)
+                                ? status.EffectiveOutputPath
                                 : expectedOutputPath;
 
-                            if (status.Success && !string.IsNullOrWhiteSpace(finalOutput) && File.Exists(finalOutput))
+                            if (status.IsSuccess && !string.IsNullOrWhiteSpace(finalOutput) && File.Exists(finalOutput))
                             {
                                 status.OutputPath = finalOutput;
                                 return status;
                             }
 
-                            if (!status.Success)
+                            if (!status.IsSuccess)
                                 return status;
                         }
                     }
@@ -1011,10 +1112,27 @@ namespace Licorp_CombineCAD.Services
 
         private class MergeStatusDto
         {
+            public bool success { get; set; }
+            public string output { get; set; }
+            public string error { get; set; }
+            public string log { get; set; }
+            public string timestamp { get; set; }
+
             public bool Success { get; set; }
             public string Message { get; set; }
             public string OutputPath { get; set; }
             public string LogPath { get; set; }
+
+            public bool IsSuccess => success || Success;
+
+            public string EffectiveOutputPath =>
+                !string.IsNullOrWhiteSpace(output) ? output : OutputPath;
+
+            public string EffectiveMessage =>
+                !string.IsNullOrWhiteSpace(error) ? error : Message;
+
+            public string EffectiveLogPath =>
+                !string.IsNullOrWhiteSpace(log) ? log : LogPath;
         }
 
         private class MergeReliabilityOptions
@@ -1029,6 +1147,7 @@ namespace Licorp_CombineCAD.Services
     public class MergeProgressInfo
     {
         public string Phase { get; set; }
+        public string SubPhase { get; set; }
         public string CurrentItem { get; set; }
         public int Current { get; set; }
         public int Total { get; set; }

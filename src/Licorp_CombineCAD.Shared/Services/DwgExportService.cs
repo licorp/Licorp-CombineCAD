@@ -265,7 +265,10 @@ namespace Licorp_CombineCAD.Services
             }
             finally
             {
-                // nothing to clean up here — link unload/reload was removed (dead code)
+                if (smartScaleService != null)
+                {
+                    smartScaleService.ClearState();
+                }
             }
 
             totalTimer.Stop();
@@ -315,7 +318,10 @@ namespace Licorp_CombineCAD.Services
                     if (fi.Length < 1024)
                         Trace.WriteLine($"[DwgExport] WARNING: very small file ({fi.Length} bytes)");
                     if (DwgCleanupService.HasXRefFiles(fullPath))
-                        Trace.WriteLine($"[DwgExport] XREF companion files detected");
+                    {
+                        int deleted = DwgCleanupService.CleanupXRefFiles(fullPath);
+                        Trace.WriteLine($"[DwgExport] Cleaned up {deleted} XREF companion files for {fileName}.dwg");
+                    }
                     return fullPath;
                 }
 
@@ -364,7 +370,12 @@ namespace Licorp_CombineCAD.Services
                 .Replace("{SheetName}", sheet.SheetName ?? "")
                 .Replace("{PaperSize}", sheet.PaperSize ?? "")
                 .Replace("{ProjectNumber}", GetProjectInfoValue(document, "Number"))
-                .Replace("{ProjectName}", GetProjectInfoValue(document, "Name"));
+                .Replace("{ProjectName}", GetProjectInfoValue(document, "Name"))
+                .Replace("{ProjectLocation}", GetProjectInfoValue(document, "PlaceName"))
+                .Replace("{Author}", GetProjectInfoValue(document, "Author"))
+                .Replace("{ClientName}", GetProjectInfoValue(document, "ClientName"))
+                .Replace("{Date}", DateTime.Now.ToString("yyyyMMdd"))
+                .Replace("{Time}", DateTime.Now.ToString("HHmm"));
 
             foreach (char c in Path.GetInvalidFileNameChars())
                 fileName = fileName.Replace(c, '-');

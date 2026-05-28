@@ -250,6 +250,7 @@ namespace Licorp_CombineCAD.Services
         public string SortMode { get; set; } = "Sheet Number";
         public string SelectedSheetScheduleId { get; set; } = "";
         public string VerticalAlign { get; set; } = "Top";
+        public bool SheetSetEnabled { get; set; } = true;
         public DateTime LastUsed { get; set; } = DateTime.Now;
     }
 }

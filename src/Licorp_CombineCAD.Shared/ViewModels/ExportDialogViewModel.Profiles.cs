@@ -105,6 +105,7 @@ namespace Licorp_CombineCAD.ViewModels
             profile.SortMode = SelectedSortMode;
             profile.SelectedSheetScheduleId = SelectedSheetSchedule?.ElementIdValue ?? "";
             profile.VerticalAlign = SelectedVerticalAlignment;
+            profile.SheetSetEnabled = SheetSetEnabled;
             profile.LastUsed = DateTime.Now;
         }
 
@@ -135,6 +136,7 @@ namespace Licorp_CombineCAD.ViewModels
             if (!string.IsNullOrEmpty(profile.VerticalAlign) && AvailableVerticalAlignments.Contains(profile.VerticalAlign))
                 SelectedVerticalAlignment = profile.VerticalAlign;
 
+            SheetSetEnabled = profile.SheetSetEnabled;
             ApplySavedScheduleSelection();
             RefreshDerivedState();
         }

@@ -423,6 +423,7 @@
                     <CheckBox Content="Open after export" IsChecked="{Binding OpenAfterExport}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Preserve coincident lines" IsChecked="{Binding PreserveCoincidentLines}" Style="{StaticResource ModernCheckBox}"/>
                     <CheckBox Content="Merge layers (consolidate CAD layers)" IsChecked="{Binding MergeLayers}" Style="{StaticResource ModernCheckBox}" ToolTip="Uncheck to reduce export time"/>
+                    <CheckBox Content="Create Sheet Set index (.dst)" IsChecked="{Binding SheetSetEnabled}" Style="{StaticResource ModernCheckBox}" ToolTip="Create AutoCAD Sheet Set Manager index file for the combined DWG"/>
 
                     <Border Background="#2D2D30"
                             BorderBrush="#3E3E3E"
