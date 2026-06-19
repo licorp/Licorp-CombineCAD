@@ -185,7 +185,7 @@ namespace Licorp_CombineCAD.Services
                 OutputFolder = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
                 FileNameTemplate = "{SheetNumber} - {SheetName}",
                 ExportMode = "MultiLayout",
-                DwgVersion = "2018"
+                DwgVersion = "2025"
             };
         }
 
@@ -202,7 +202,7 @@ namespace Licorp_CombineCAD.Services
             if (string.IsNullOrWhiteSpace(profile.ExportMode))
                 profile.ExportMode = "MultiLayout";
             if (string.IsNullOrWhiteSpace(profile.DwgVersion))
-                profile.DwgVersion = "2018";
+                profile.DwgVersion = "2025";
             if (string.IsNullOrWhiteSpace(profile.SortMode))
                 profile.SortMode = "Sheet Number";
             if (string.IsNullOrWhiteSpace(profile.VerticalAlign))
@@ -243,7 +243,7 @@ namespace Licorp_CombineCAD.Services
         public string FileNameTemplate { get; set; } = "{SheetNumber} - {SheetName}";
         public string SelectedSetup { get; set; } = "";
         public string ExportMode { get; set; } = "MultiLayout";
-        public string DwgVersion { get; set; } = "2018";
+        public string DwgVersion { get; set; } = "2025";
         public bool SmartViewScale { get; set; } = false;
         public bool OpenAfterExport { get; set; } = false;
         public bool PreserveCoincidentLines { get; set; } = false;

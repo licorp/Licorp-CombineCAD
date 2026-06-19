@@ -511,6 +511,12 @@ namespace Licorp_CombineCAD.Services
         {
             switch (version?.ToLower())
             {
+                case "2025": 
+                case "2024": 
+                case "2023": 
+                case "2022": 
+                case "2021": 
+                case "2020": return ACADVersion.R2018;
                 case "2018": return ACADVersion.R2018;
                 case "2013": return ACADVersion.R2013;
                 case "2010": return ACADVersion.R2010;

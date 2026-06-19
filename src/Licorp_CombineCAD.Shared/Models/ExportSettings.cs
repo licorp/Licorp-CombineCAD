@@ -17,7 +17,7 @@ namespace Licorp_CombineCAD.Models
 
         // ===== DWG Options =====
         private string _dwgExportSetupName = "";
-        private string _dwgVersion = "2018";
+        private string _dwgVersion = "2025";
 
         // ===== Advanced Options (MLabs features) =====
         private bool _openAfterExport = false;
